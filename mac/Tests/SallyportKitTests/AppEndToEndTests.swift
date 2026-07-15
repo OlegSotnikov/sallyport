@@ -382,7 +382,7 @@ struct ConfigChangeGateTests {
         #expect(auth.seen.contains { $0.contains("SSH host") && $0.contains("prod-1") })
         #expect(auth.seen.contains { $0.contains("MCP server") && $0.contains("linear") })
         // The session-gate change is named precisely — not a generic "settings".
-        #expect(auth.seen.contains { $0.contains("Set new-agent approval to \"Off\"") })
+        #expect(auth.seen.contains { $0.contains("Set new-agent approval to “Off”") })
     }
 
     @Test("reads and session revoke are NOT gated — killing a rogue agent can't wait on a finger")
@@ -438,7 +438,7 @@ struct ConfigChangeGateTests {
             _ = try await model.mgmt.updateSettings(sessionAuth: "off")
         }
         #expect(model.runtime.host?.settings.sessionAuth() == "click", "the session gate must be unchanged")
-        #expect(auth.seen.contains { $0.contains("Set new-agent approval to \"Off\"") })
+        #expect(auth.seen.contains { $0.contains("Set new-agent approval to “Off”") })
 
         // Auto-lock and lock-on-screen-lock are likewise always gated.
         await #expect(throws: (any Error).self) {
@@ -448,7 +448,7 @@ struct ConfigChangeGateTests {
             _ = try await model.mgmt.updateSettings(lockOnScreenLock: false)
         }
         #expect(auth.seen.contains { $0.contains("auto-lock") })
-        #expect(auth.seen.contains { $0.contains("screen-lock") })
+        #expect(auth.seen.contains { $0.contains("screen lock") })
 
         // Adding to the agent ALLOWLIST is always gated too — a synthetic click
         // must not be able to auto-approve itself (docs/14 §2.5).
@@ -457,7 +457,7 @@ struct ConfigChangeGateTests {
                 label: "evil", kind: "cdhash", cdhashes: ["deadbeef"]))
         }
         #expect(try await model.mgmt.listAllowlist().isEmpty, "nothing was allowlisted without a fingerprint")
-        #expect(auth.seen.contains { $0.contains("Auto-approve the agent") })
+        #expect(auth.seen.contains { $0.contains("Add the agent") && $0.contains("evil") })
     }
 
     @Test("with the fingerprint the change lands — and the gate can only be lifted WITH one")

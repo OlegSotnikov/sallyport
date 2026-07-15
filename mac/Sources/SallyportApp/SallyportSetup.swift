@@ -43,11 +43,15 @@ struct SallyportSetup: Sendable {
 /// User-facing failures for irreversible gate/reset operations.
 enum SetupError: LocalizedError, Equatable {
     case gateEnable(String)
+    case reset(String)
 
     var errorDescription: String? {
         switch self {
         case .gateEnable(let detail):
-            return "Enabling the hardware gate failed: \(detail)"
+            return String(localized: "Enabling the hardware gate failed: \(detail)",
+                          comment: "Hardware-gate error followed by a localized detail.")
+        case .reset(let detail):
+            return detail
         }
     }
 }

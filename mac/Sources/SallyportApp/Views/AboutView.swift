@@ -2,15 +2,19 @@ import SwiftUI
 
 /// Displays app identity, version, source, and copyright.
 struct AboutView: View {
+    var updater: SoftwareUpdater? = nil
+
     /// Author link shared with the standard About panel.
     static let authorURL = URL(string: "https://oleg.is/?utm_source=sallyport&utm_medium=app&utm_campaign=about")
     /// Source link shared with the standard About panel.
     static let sourceURL = URL(string: "https://github.com/OlegSotnikov/sallyport")
 
     private var version: String {
-        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
-        return "Version \(short) (\(build))"
+        let unknown = String(localized: "Unknown")
+        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? unknown
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? unknown
+        return String(localized: "Version \(short) (\(build))",
+                      comment: "App version followed by its build number.")
     }
 
     /// Copyright line with an author link.
@@ -24,7 +28,7 @@ struct AboutView: View {
 
     /// Source repository link.
     private var source: AttributedString {
-        var line = AttributedString("Source code: ")
+        var line = AttributedString(String(localized: "Source code: "))
         var repo = AttributedString("github.com/OlegSotnikov/sallyport")
         repo.link = Self.sourceURL
         line.append(repo)
@@ -33,8 +37,8 @@ struct AboutView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScreenHeader(title: "About",
-                         subtitle: "Version and source.",
+            ScreenHeader(title: LocalizedStringResource("About"),
+                         subtitle: LocalizedStringResource("Version and source."),
                          symbol: "info.circle") { EmptyView() }
             Divider()
 
@@ -46,18 +50,24 @@ struct AboutView: View {
                     .interpolation(.high)
                     .frame(width: 120, height: 120)
                     .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+                    .accessibilityHidden(true)
 
-                Text("Sallyport")
+                Text(verbatim: "Sallyport")
                     .font(.system(size: 30, weight: .semibold))
-                Text(version)
+                Text(verbatim: version)
                     .font(.callout).foregroundStyle(.secondary)
+
+                Button("Check for Updates…", systemImage: "arrow.down.circle",
+                       action: checkForUpdates)
+                    .buttonStyle(.bordered)
+                    .disabled(updater?.canCheck != true)
 
                 Text("Stores credentials and uses them for configured agent actions without returning them to the agent.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 440)
+                    .frame(maxWidth: 520)
                     .padding(.top, 2)
 
                 Spacer(minLength: Theme.Spacing.lg)
@@ -65,7 +75,7 @@ struct AboutView: View {
                 VStack(spacing: 4) {
                     Text(source)
                     Text(copyright)
-                    Text("AppMaster")
+                    Text(verbatim: "AppMaster")
                 }
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -75,5 +85,9 @@ struct AboutView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(Theme.screenPadding)
         }
+    }
+
+    private func checkForUpdates() {
+        updater?.checkForUpdates()
     }
 }

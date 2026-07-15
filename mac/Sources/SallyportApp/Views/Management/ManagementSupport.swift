@@ -5,8 +5,28 @@ import SallyportKit
 
 /// Converts an error into text for a banner or toast.
 func describe(_ error: Error) -> String {
-    if let mgmt = error as? MgmtError { return mgmt.message }
-    if let failure = error as? MgmtClient.Failure { return failure.errorDescription ?? "\(failure)" }
+    if let mgmt = error as? MgmtError {
+        switch mgmt.code {
+        case "locked":
+            return String(localized: "The vault is locked. Unlock it and try again.")
+        case "quarantined":
+            return String(localized: "The vault is quarantined. Review the integrity warning before continuing.")
+        case "touchid_required":
+            return String(localized: "Touch ID is required to make this change.")
+        default:
+            return mgmt.message
+        }
+    }
+    if let failure = error as? MgmtClient.Failure {
+        switch failure {
+        case .notConnected:
+            return String(localized: "The management service is unavailable.")
+        case .linkDropped:
+            return String(localized: "The management connection closed.")
+        case .timedOut:
+            return String(localized: "The management request timed out.")
+        }
+    }
     return (error as? LocalizedError)?.errorDescription ?? "\(error)"
 }
 
@@ -41,7 +61,7 @@ private struct ToastOverlay: ViewModifier {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: toast.kind == .success ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(toast.kind == .success ? Theme.verified : Theme.danger)
-                    Text(toast.text).font(.callout)
+                    Text(verbatim: toast.text).font(.callout)
                 }
                 .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.md - 2)
                 .background(.regularMaterial, in: Capsule())
@@ -72,20 +92,22 @@ struct ErrorBanner: View {
     @State private var showDetail = false
 
     private var technical: Bool { looksTechnical(message) }
-    private var headline: String { technical ? "Could not load data" : message }
-
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.warning)
                 .font(.title3)
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text(headline).font(.callout).fontWeight(.medium)
+                if technical {
+                    Text("Could not load data").font(.callout).fontWeight(.medium)
+                } else {
+                    Text(verbatim: message).font(.callout).fontWeight(.medium)
+                }
                 if technical {
                     DisclosureGroup(isExpanded: $showDetail) {
                         // Limit long decoder output to the disclosure area.
                         ScrollView {
-                            Text(message)
+                            Text(verbatim: message)
                                 .font(Theme.Typography.monoSmall)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
@@ -115,8 +137,8 @@ struct ErrorBanner: View {
 
 /// Shared layout for management screens.
 struct ManagementScaffold<Toolbar: View, Content: View>: View {
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringResource
+    let subtitle: LocalizedStringResource
     let symbol: String
     var isLoading: Bool = false
     var error: String?
@@ -201,8 +223,8 @@ struct LockedVaultView: View {
 
 /// A form control with a right-aligned label and optional help text.
 struct FormRow<Content: View>: View {
-    let label: String
-    var hint: String?
+    let label: LocalizedStringResource
+    var hint: LocalizedStringResource?
     /// Adds a visual marker and includes "required" in the accessibility label.
     var isRequired: Bool = false
     /// Replaces the hint after validation fails.
@@ -216,24 +238,39 @@ struct FormRow<Content: View>: View {
             HStack(spacing: 2) {
                 Text(label)
                 if isRequired {
-                    Text("*")
+                    Text(verbatim: "*")
                         .foregroundStyle(Theme.accent)
                         .accessibilityHidden(true)
                 }
             }
             .font(.callout)
             .foregroundStyle(error == nil ? .secondary : Theme.danger)
-            .frame(width: 116, alignment: .trailing)
-            .accessibilityLabel(isRequired ? "\(label), required" : label)
+            .multilineTextAlignment(.trailing)
+            .lineLimit(2)
+            .frame(minWidth: 116, idealWidth: 140, maxWidth: 156, alignment: .trailing)
+            .accessibilityLabel(
+                isRequired
+                    ? String(localized: "\(String(localized: label)), required",
+                             comment: "Accessibility label for a required form field")
+                    : String(localized: label)
+            )
 
             VStack(alignment: .leading, spacing: 3) {
                 content()
                 if let error {
-                    Label(error, systemImage: "exclamationmark.circle.fill")
+                    Label {
+                        Text(verbatim: error)
+                    } icon: {
+                        Image(systemName: "exclamationmark.circle.fill")
+                    }
                         .font(.caption2).foregroundStyle(Theme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if let warning {
-                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    Label {
+                        Text(verbatim: warning)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
                         .font(.caption2).foregroundStyle(Theme.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if let hint {
@@ -299,7 +336,7 @@ struct FlowChips: View {
                   alignment: .leading, spacing: Theme.Spacing.sm) {
             ForEach(tokens, id: \.self) { token in
                 HStack(spacing: Theme.Spacing.xs) {
-                    Text(token).font(.caption).lineLimit(1)
+                    Text(verbatim: token).font(.caption).lineLimit(1)
                     Button {
                         onRemove(token)
                     } label: {
@@ -320,7 +357,7 @@ struct MonoTag: View {
     let text: String
     var tint: Color = .secondary
     var body: some View {
-        Text(text)
+        Text(verbatim: text)
             .font(Theme.Typography.monoSmall)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
@@ -330,7 +367,7 @@ struct MonoTag: View {
 
 /// Shared layout for editor and detail sheets.
 struct SheetScaffold<Content: View, Footer: View>: View {
-    let title: String
+    let title: LocalizedStringResource
     var systemImage: String = "square.and.pencil"
     var width: CGFloat = 480
     /// Scroll the body when it's taller than the sheet (long forms stay usable).
@@ -338,7 +375,7 @@ struct SheetScaffold<Content: View, Footer: View>: View {
     @ViewBuilder var content: () -> Content
     @ViewBuilder var footer: () -> Footer
 
-    init(_ title: String, systemImage: String = "square.and.pencil", width: CGFloat = 480,
+    init(_ title: LocalizedStringResource, systemImage: String = "square.and.pencil", width: CGFloat = 480,
          scrolls: Bool = true,
          @ViewBuilder content: @escaping () -> Content,
          @ViewBuilder footer: @escaping () -> Footer = { EmptyView() }) {
@@ -382,7 +419,7 @@ struct SheetScaffold<Content: View, Footer: View>: View {
 
 /// Sheet footer with cancel, primary action, and progress state.
 struct SheetButtons: View {
-    var saveTitle: String = "Save"
+    var saveTitle: LocalizedStringResource = "Save"
     var isBusy: Bool
     var isDisabled: Bool = false
     var onCancel: () -> Void

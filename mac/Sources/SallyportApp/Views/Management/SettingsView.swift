@@ -45,11 +45,17 @@ struct SettingsView: View {
     @State private var vm: SettingsViewModel
     @State private var notifStatus: ApprovalNotification.Authorization?
     @State private var alertStyle: ApprovalNotification.AlertStyle?
+    @State private var languageSelection: AppLanguageSelection
     @Environment(\.openURL) private var openURL
 
-    init(model: AppModel) {
+    init(model: AppModel,
+         runningLanguage: AppLanguage = AppLanguagePreference.current) {
         self.model = model
         _vm = State(initialValue: SettingsViewModel(mgmt: model.mgmt))
+        _languageSelection = State(initialValue: AppLanguageSelection(
+            running: runningLanguage,
+            selected: AppLanguagePreference.current
+        ))
     }
 
     var body: some View {
@@ -70,6 +76,7 @@ struct SettingsView: View {
     @ViewBuilder private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                applicationCard
                 vaultCard
                 postureCard
                 connectionCard
@@ -80,20 +87,77 @@ struct SettingsView: View {
         }
     }
 
+    private var applicationCard: some View {
+        Card {
+            SectionHeader("Application", systemImage: "globe")
+            HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Language").font(.callout.weight(.medium))
+                    Text("System Default follows Language & Region in System Settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Picker("Language", selection: languageBinding) {
+                    Text("System Default").tag(AppLanguage.system)
+                    ForEach(AppLanguage.allCases.filter { $0 != .system }) { language in
+                        Text(verbatim: language.nativeName).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            if languageSelection.requiresRestart {
+                Divider()
+                HStack(spacing: Theme.Spacing.md) {
+                    Text("Restart Sallyport to apply the language change.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: Theme.Spacing.sm)
+                    Button("Restart Now", systemImage: "arrow.clockwise") {
+                        AppLanguagePreference.restart()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private var languageBinding: Binding<AppLanguage> {
+        Binding(
+            get: { languageSelection.selected },
+            set: { language in
+                languageSelection.selected = language
+                AppLanguagePreference.set(language)
+            }
+        )
+    }
+
     private var vaultCard: some View {
         Card {
             SectionHeader("Vault", systemImage: "lock.rectangle.stack")
             HStack(spacing: Theme.Spacing.md) {
                 Image(systemName: model.vault.symbol).font(.title).foregroundStyle(model.vault.tint).frame(width: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.vault.locked ? "Vault locked" : "Vault unlocked").font(.headline)
+                    if model.vault.locked {
+                        Text("Vault locked").font(.headline)
+                    } else {
+                        Text("Vault unlocked").font(.headline)
+                    }
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(model.vault.locked
-                             ? "Stored credentials are unavailable while the vault is locked."
-                             : model.vault.ttlSec > 0
-                                ? "Auto-locks in \(model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date))."
-                                : "Auto-lock is off. Manual lock, sleep, or app exit still closes the vault.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        if model.vault.locked {
+                            Text("Stored credentials are unavailable while the vault is locked.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else if model.vault.ttlSec > 0 {
+                            Text("Auto-locks in \(model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date)).")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("Auto-lock is off. Manual lock, sleep, or app exit still closes the vault.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Spacer()
@@ -140,11 +204,15 @@ struct SettingsView: View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Auto-lock the vault").font(.callout.weight(.medium))
-                Text(vm.posture.autoLockMinutes > 0
-                     ? "Locks \(Self.minutesLabel(vm.posture.autoLockMinutes)) after unlock. Locking ends active sessions."
-                     : "Off. Manual lock, sleep, or app exit still closes the vault.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if vm.posture.autoLockMinutes > 0 {
+                    Text("Locks \(Self.minutesLabel(vm.posture.autoLockMinutes)) after unlock. Locking ends active sessions.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Off. Manual lock, sleep, or app exit still closes the vault.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if vm.posture.autoLockMinutes > 0 {
@@ -173,8 +241,11 @@ struct SettingsView: View {
         return choices
     }
 
-    private static func minutesLabel(_ m: Int) -> String {
-        m % 60 == 0 ? (m == 60 ? "1 hour" : "\(m / 60) hours") : "\(m) min"
+    private static func minutesLabel(_ minutes: Int, locale: Locale = .autoupdatingCurrent) -> String {
+        Duration.seconds(Double(minutes) * 60).formatted(
+            .units(allowed: [.hours, .minutes], width: .wide, maximumUnitCount: 1)
+                .locale(locale)
+        )
     }
 
     private var autoLockEnabledBinding: Binding<Bool> {
@@ -193,7 +264,9 @@ struct SettingsView: View {
     }
 
     /// Aligns settings switches in one trailing column.
-    private func postureToggle(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+    private func postureToggle(title: LocalizedStringResource,
+                               subtitle: LocalizedStringResource,
+                               isOn: Binding<Bool>) -> some View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout.weight(.medium))
@@ -224,11 +297,13 @@ struct SettingsView: View {
                 Text("One click").tag("click")
                 Text("Touch ID").tag("touchid")
             }
-            .pickerStyle(.segmented).fixedSize()
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(minWidth: 260)
         }
     }
 
-    private var sessionAuthSubtitle: String {
+    private var sessionAuthSubtitle: LocalizedStringResource {
         switch vm.posture.sessionAuth {
         case "off":
             return "New processes start without session approval. Calls are still logged, and per-call settings still apply."
@@ -258,14 +333,18 @@ struct SettingsView: View {
                 }
             }
             KeyValueRow("Socket") {
-                Text(model.socketPath).font(Theme.Typography.monoSmall).textSelection(.enabled).foregroundStyle(.secondary)
+                    Text(verbatim: model.socketPath).font(Theme.Typography.monoSmall).textSelection(.enabled).foregroundStyle(.secondary)
             }
             if let core = vm.status?.daemon {
-                KeyValueRow("Version") { Text(core.version).font(Theme.Typography.monoSmall).foregroundStyle(.secondary) }
-                KeyValueRow("Home") { Text(core.home).font(Theme.Typography.monoSmall).textSelection(.enabled).foregroundStyle(.secondary) }
+                KeyValueRow("Version") { Text(verbatim: core.version).font(Theme.Typography.monoSmall).foregroundStyle(.secondary) }
+                KeyValueRow("Home") { Text(verbatim: core.home).font(Theme.Typography.monoSmall).textSelection(.enabled).foregroundStyle(.secondary) }
             }
             if let error = vm.error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
+                Label {
+                    Text(verbatim: error)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
                     .font(.caption).foregroundStyle(Theme.warning)
             }
             if model.autoApprove {
@@ -284,22 +363,27 @@ struct SettingsView: View {
                 Image(systemName: notifOn ? "bell.badge.fill" : "bell.slash")
                     .font(.title).foregroundStyle(notifOn ? Theme.verified : Theme.warning).frame(width: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(notifOn ? "Approval notifications on" : "Notifications off")
-                        .font(.headline)
-                    Text(notifOn
-                         ? "Notifications include Approve and Deny actions."
-                         : "Approval requests use the in-app panel instead.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if notifOn {
+                        Text("Approval notifications on").font(.headline)
+                        Text("Notifications include Approve and Deny actions.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Notifications off").font(.headline)
+                        Text("Approval requests use the in-app panel instead.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer()
                 if notifOn {
                     Button("Test", systemImage: "paperplane") { model.sendTestNotification() }
                 } else {
                     // After denial, macOS requires the user to change this in System Settings.
-                    Button(notifStatus == .denied ? "Open Settings" : "Enable", systemImage: "bell") {
-                        if notifStatus == .denied {
+                    if notifStatus == .denied {
+                        Button("Open Settings", systemImage: "bell") {
                             if let url = Self.notificationsSettingsURL { openURL(url) }
-                        } else {
+                        }
+                    } else {
+                        Button("Enable", systemImage: "bell") {
                             Task { _ = await model.requestNotificationPermission(); await loadNotifStatus() }
                         }
                     }
@@ -355,10 +439,17 @@ struct SettingsView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: model.backend == .secureEnclave ? "cpu.fill" : "desktopcomputer")
                     .foregroundStyle(model.backend == .secureEnclave ? Theme.verified : Theme.warning)
-                Text(model.backend.displayName).fontWeight(.medium)
+                if model.backend == .secureEnclave {
+                    Text("Secure Enclave").fontWeight(.medium)
+                } else {
+                    Text("Software key").fontWeight(.medium)
+                }
                 Spacer()
-                StatusPill(model.backend == .secureEnclave ? "hardware" : "software",
-                           tint: model.backend == .secureEnclave ? Theme.verified : Theme.warning)
+                if model.backend == .secureEnclave {
+                    StatusPill("Hardware", tint: Theme.verified)
+                } else {
+                    StatusPill("Software", tint: Theme.warning)
+                }
             }
             if model.backend == .software {
                 Text("Development software keys are in use. Release builds on Apple Silicon use Secure Enclave and Touch ID.")
@@ -376,7 +467,7 @@ struct SettingsView: View {
         case .disconnected: return .secondary
         }
     }
-    private var connectionLabel: String {
+    private var connectionLabel: LocalizedStringResource {
         switch model.connection {
         case .connected: return "Connected"
         case .connecting: return "Starting…"

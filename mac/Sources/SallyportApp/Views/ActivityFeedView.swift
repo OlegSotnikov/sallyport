@@ -73,13 +73,21 @@ struct ActivityFeedView: View {
 
     /// Uses the same widths as activity rows.
     private var activityHeader: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            headerCell("Time", width: ActivityColumns.time, align: .leading)
-            headerCell("Agent", width: ActivityColumns.identity, align: .leading)
-            Text("Action").frame(maxWidth: .infinity, alignment: .leading)
-            headerCell("Target", width: ActivityColumns.target, align: .trailing)
-            headerCell("Decision", width: ActivityColumns.decision, align: .leading)
-            headerCell("Took", width: ActivityColumns.duration, align: .trailing)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Spacing.md) {
+                headerCell("Time", width: ActivityColumns.time, align: .leading)
+                headerCell("Agent", width: ActivityColumns.identity, align: .leading)
+                Text("Action").frame(maxWidth: .infinity, alignment: .leading)
+                headerCell("Target", width: ActivityColumns.target, align: .trailing)
+                headerCell("Decision", width: ActivityColumns.decision, align: .leading)
+                headerCell("Took", width: ActivityColumns.duration, align: .trailing)
+            }
+            .frame(minWidth: ActivityColumns.wideMinimumWidth)
+
+            HStack(spacing: Theme.Spacing.md) {
+                Text("Action").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Decision").fixedSize(horizontal: true, vertical: false)
+            }
         }
         .font(.caption2.weight(.semibold)).tracking(0.5)
         .foregroundStyle(.tertiary)
@@ -87,7 +95,7 @@ struct ActivityFeedView: View {
         .padding(.vertical, Theme.Spacing.sm)
     }
 
-    private func headerCell(_ text: String, width: CGFloat, align: Alignment) -> some View {
+    private func headerCell(_ text: LocalizedStringResource, width: CGFloat, align: Alignment) -> some View {
         Text(text).frame(width: width, alignment: align)
     }
 
@@ -104,88 +112,158 @@ struct ActivityFeedView: View {
     }
 
     private var filterBar: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Filter identity, tool, target…", text: $model.filter.query)
-                    .textFieldStyle(.plain)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Spacing.md) {
+                filterField
+                    .frame(maxWidth: 320)
+                channelPicker
+                flaggedToggle
+                Spacer(minLength: Theme.Spacing.sm)
+                eventCount
             }
-            .padding(.horizontal, Theme.Spacing.sm).padding(.vertical, 5)
-            .background(Theme.Surface.inset, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
-            .frame(maxWidth: 320)
+            .frame(minWidth: ActivityColumns.wideFilterMinimumWidth)
 
-            Picker("Channel", selection: Binding(
-                get: { model.filter.channel ?? "" },
-                set: { model.filter.channel = $0.isEmpty ? nil : $0 })
-            ) {
-                Text("All channels").tag("")
-                ForEach(model.activity.channels, id: \.self) { Text($0).tag($0) }
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                filterField
+                HStack(spacing: Theme.Spacing.md) {
+                    channelPicker
+                    flaggedToggle
+                    Spacer(minLength: Theme.Spacing.xs)
+                    eventCount
+                }
             }
-            .labelsHidden()
-            .fixedSize()
-
-            Toggle(isOn: $model.filter.onlyFlagged) {
-                Label("Flagged", systemImage: "exclamationmark.triangle")
-            }
-            .toggleStyle(.button)
-            .controlSize(.small)
-
-            Spacer()
-
-            Text("\(rows.count) \(rows.count == 1 ? "event" : "events")")
-                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, Theme.screenPadding).padding(.vertical, Theme.Spacing.sm + 2)
+    }
+
+    private var filterField: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Filter identity, tool, target…", text: $model.filter.query)
+                .textFieldStyle(.plain)
+        }
+        .padding(.horizontal, Theme.Spacing.sm).padding(.vertical, 5)
+        .background(Theme.Surface.inset, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
+    }
+
+    private var channelPicker: some View {
+        Picker("Channel", selection: Binding(
+            get: { model.filter.channel ?? "" },
+            set: { model.filter.channel = $0.isEmpty ? nil : $0 })
+        ) {
+            Text("All channels").tag("")
+            ForEach(model.activity.channels, id: \.self) {
+                Text(verbatim: $0).tag($0)
+            }
+        }
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    private var flaggedToggle: some View {
+        Toggle(isOn: $model.filter.onlyFlagged) {
+            Label("Flagged", systemImage: "exclamationmark.triangle")
+        }
+        .toggleStyle(.button)
+        .controlSize(.small)
+        .fixedSize()
+    }
+
+    private var eventCount: some View {
+        Text("\(rows.count) events",
+             comment: "Number of visible activity events. Configure plural variations for the event count.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: true, vertical: false)
     }
 }
 
 /// Shared widths for the activity header and rows.
 enum ActivityColumns {
-    static let time: CGFloat = 66
-    static let identity: CGFloat = 118
-    static let target: CGFloat = 120
-    static let decision: CGFloat = 150
-    static let duration: CGFloat = 62
+    static let time: CGFloat = 96
+    static let identity: CGFloat = 128
+    static let target: CGFloat = 140
+    static let decision: CGFloat = 220
+    static let duration: CGFloat = 72
+    static let wideMinimumWidth: CGFloat = 920
+    static let wideFilterMinimumWidth: CGFloat = 760
 }
 
 struct ActivityRowView: View {
     let row: ActivityRow
+    @Environment(\.locale) private var locale
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            Text(TimeFormat.clock(row.ts))
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .frame(width: ActivityColumns.time, alignment: .leading)
-            HStack(spacing: 4) {
-                if let o = row.origin {
-                    Image(systemName: (o.signed ?? false) ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle((o.signed ?? false) ? Theme.verified : Theme.warning)
-                        .help((o.signed ?? false)
-                              ? "\(o.displayName): \(o.signedBy ?? "signed")"
-                              : "\(o.displayName): unsigned or not verified")
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Spacing.md) {
+                Text(verbatim: TimeFormat.clock(row.ts, locale: locale))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .frame(width: ActivityColumns.time, alignment: .leading)
+                identity
+                    .frame(width: ActivityColumns.identity, alignment: .leading)
+                action
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(verbatim: row.target)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: ActivityColumns.target, alignment: .trailing)
+                DecisionBadge(decision: row.decision, isError: row.isError)
+                    .frame(width: ActivityColumns.decision, alignment: .leading)
+                duration
+                    .frame(width: ActivityColumns.duration, alignment: .trailing)
+            }
+            .frame(minWidth: ActivityColumns.wideMinimumWidth)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs + 1) {
+                HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                    action
+                        .layoutPriority(1)
+                    Spacer(minLength: Theme.Spacing.xs)
+                    DecisionBadge(decision: row.decision, isError: row.isError)
                 }
-                Text(shortIdentity)
-                    .font(.callout).fontWeight(.medium)
-                    .lineLimit(1).truncationMode(.tail)
+
+                HStack(spacing: Theme.Spacing.md) {
+                    identity
+                        .layoutPriority(1)
+                    Spacer(minLength: Theme.Spacing.xs)
+                    Label {
+                        Text(verbatim: TimeFormat.clock(row.ts, locale: locale))
+                    } icon: {
+                        Image(systemName: "clock")
+                            .accessibilityHidden(true)
+                    }
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .accessibilityLabel("Time")
+                    .accessibilityValue(Text(verbatim: TimeFormat.clock(row.ts, locale: locale)))
+                }
+
+                HStack(spacing: Theme.Spacing.md) {
+                    Label {
+                        Text(verbatim: row.target)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } icon: {
+                        Image(systemName: "scope")
+                            .accessibilityHidden(true)
+                    }
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .layoutPriority(1)
+                    .accessibilityLabel("Target")
+                    .accessibilityValue(Text(verbatim: row.target))
+
+                    Spacer(minLength: Theme.Spacing.xs)
+                    duration
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
-            .frame(width: ActivityColumns.identity, alignment: .leading)
-            // The action column absorbs remaining width.
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.tool).font(.callout).lineLimit(1)
-                Text(row.argsPreview).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Text(row.target).font(.caption.monospaced()).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-                .frame(width: ActivityColumns.target, alignment: .trailing)
-            DecisionBadge(decision: row.decision, isError: row.isError)
-                .frame(width: ActivityColumns.decision, alignment: .leading)
-            Text(row.durationMs.map(Self.formatDuration) ?? "")
-                .font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .frame(width: ActivityColumns.duration, alignment: .trailing)
         }
         // Match the header inset and remove the list's default row inset.
         .padding(.horizontal, Theme.screenPadding)
@@ -196,21 +274,91 @@ struct ActivityRowView: View {
         .listRowBackground(row.isFlagged ? Theme.danger.opacity(0.06) : Color.clear)
     }
 
+    private var identity: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            if let o = row.origin {
+                Image(systemName: (o.signed ?? false) ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle((o.signed ?? false) ? Theme.verified : Theme.warning)
+                    .accessibilityLabel(
+                        Text((o.signed ?? false)
+                             ? LocalizedStringResource("Valid code signature")
+                             : LocalizedStringResource("Unsigned or not verified"))
+                    )
+                    .help(signatureHelp(for: o))
+            }
+            Text(verbatim: shortIdentity)
+                .font(.callout)
+                .fontWeight(.medium)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityLabel("Agent")
+                .accessibilityValue(Text(verbatim: shortIdentity))
+        }
+    }
+
+    private var action: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(verbatim: row.tool)
+                .font(.callout)
+                .lineLimit(1)
+            Text(verbatim: row.argsPreview)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Action")
+        .accessibilityValue(Text(verbatim: actionAccessibilityValue))
+    }
+
+    private var duration: some View {
+        Text(verbatim: durationText)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+            .accessibilityLabel("Took")
+            .accessibilityValue(Text(verbatim: durationText))
+    }
+
+    private var durationText: String {
+        row.durationMs.map { Self.formatDuration($0, locale: locale) } ?? ""
+    }
+
+    private var actionAccessibilityValue: String {
+        row.argsPreview.isEmpty ? row.tool : "\(row.tool), \(row.argsPreview)"
+    }
+
     private var shortIdentity: String {
-        row.identity.replacingOccurrences(of: "agent://", with: "")
+        guard row.identity.hasPrefix("agent://") else { return row.identity }
+        return String(row.identity.dropFirst("agent://".count))
+    }
+
+    /// Keeps captured names verbatim while localizing the app-owned status fallback.
+    private func signatureHelp(for origin: ActivityOrigin) -> String {
+        let status: String
+        if origin.signed ?? false {
+            status = origin.signedBy ?? String(localized: "Valid code signature")
+        } else {
+            status = String(localized: "Unsigned or not verified")
+        }
+        return "\(origin.displayName): \(status)"
     }
 
     /// Formats milliseconds for the activity table.
-    static func formatDuration(_ ms: Int) -> String {
-        guard ms > 0 else { return "0ms" }
-        if ms < 1000 { return "\(ms)ms" }
-        let s = Double(ms) / 1000
-        if s < 10 { return String(format: "%.1fs", s) }
-        // Integer quotient/remainder avoids converting a rounded Double near
-        // Int.max, which can become Int.max+1 and terminate the UI process.
-        let total = ms / 1000 + (ms % 1000 >= 500 ? 1 : 0)
-        if total < 60 { return "\(total)s" }
-        return "\(total / 60)m \(total % 60)s"
+    static func formatDuration(_ ms: Int, locale: Locale = .autoupdatingCurrent) -> String {
+        guard ms > 0 else {
+            return Measurement(value: 0, unit: UnitDuration.milliseconds)
+                .formatted(.measurement(width: .narrow, usage: .asProvided).locale(locale))
+        }
+        if ms < 1000 {
+            return Measurement(value: Double(ms), unit: UnitDuration.milliseconds)
+                .formatted(.measurement(width: .narrow, usage: .asProvided).locale(locale))
+        }
+        return Duration.seconds(Double(ms) / 1000).formatted(
+            .units(allowed: [.minutes, .seconds], width: .narrow, maximumUnitCount: 2)
+                .locale(locale)
+        )
     }
 }
 
@@ -218,8 +366,22 @@ struct DecisionBadge: View {
     let decision: String
     let isError: Bool
 
-    var body: some View {
-        StatusPill(decision, tint: tint)
+    @ViewBuilder var body: some View {
+        switch decision {
+        case "allow": StatusPill("Allowed", tint: tint)
+        case "allowlist-allow": StatusPill("Allowed by allowlist", tint: tint)
+        case "deny": StatusPill("Denied", tint: tint)
+        case "ask→approved", "ask→approved (you)": StatusPill("Approved", tint: tint)
+        case "ask→approved (auto)": StatusPill("Auto-approved", tint: tint)
+        case "ask→denied", "ask→denied (you)": StatusPill("Denied", tint: tint)
+        case "ask→timeout": StatusPill("Timed out", tint: tint)
+        case "ask→cancelled": StatusPill("Cancelled", tint: tint)
+        case "session-approved": StatusPill("Session approved", tint: tint)
+        case "session-expired": StatusPill("Session expired", tint: tint)
+        case "config": StatusPill("Configuration", tint: tint)
+        case "info": StatusPill("Info", tint: tint)
+        default: StatusPill(verbatim: decision, tint: tint)
+        }
     }
 
     private var tint: Color {
@@ -236,6 +398,7 @@ struct ActivityDetailView: View {
     var model: AppModel? = nil
     let onClose: () -> Void
 
+    @Environment(\.locale) private var locale
     @State private var recordingError: String?
     @State private var savingRecording = false
 
@@ -243,7 +406,7 @@ struct ActivityDetailView: View {
         SheetScaffold("Activity detail", systemImage: "list.bullet.rectangle", width: 460) {
             DecisionBadge(decision: row.decision, isError: row.isError)
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                detailRow("Time", TimeFormat.full(row.ts))
+                detailRow("Time", TimeFormat.full(row.ts, locale: locale))
                 detailRow("Identity", row.identity)
                 detailRow("Channel", row.channel)
                 detailRow("Tool", row.tool)
@@ -275,15 +438,20 @@ struct ActivityDetailView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: (o.signed ?? false) ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle((o.signed ?? false) ? Theme.verified : Theme.warning)
-                Text(o.displayName).fontWeight(.semibold)
+                Text(verbatim: o.displayName).fontWeight(.semibold)
                 if let pid = o.pid, pid > 0 {
-                    Text("pid \(pid)").font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    Text(verbatim: "pid \(pid)").font(.caption2.monospaced()).foregroundStyle(.tertiary)
                 }
             }
             if let by = o.signedBy, !by.isEmpty {
                 detailRow("Signed by", by)
             } else {
-                detailRow("Signature", (o.signed ?? false) ? "valid" : "unsigned / not verified")
+                detailRow(
+                    "Signature",
+                    (o.signed ?? false)
+                        ? String(localized: "Valid")
+                        : String(localized: "Unsigned or not verified")
+                )
             }
             if let path = o.path, !path.isEmpty { detailRow("Path", path) }
             if let chain = o.chain, !chain.isEmpty { detailRow("Process chain", chain) }
@@ -307,7 +475,11 @@ struct ActivityDetailView: View {
                 }
                 .disabled(savingRecording)
                 if let recordingError {
-                    Label(recordingError, systemImage: "exclamationmark.triangle.fill")
+                    Label {
+                        Text(verbatim: recordingError)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
                         .font(.caption).foregroundStyle(Theme.danger)
                 }
             }
@@ -323,7 +495,7 @@ struct ActivityDetailView: View {
         do {
             data = try await model.decryptRecording(path: path)
         } catch {
-            recordingError = "Could not decrypt the recording. Unlock the vault and try again."
+            recordingError = String(localized: "Could not decrypt the recording. Unlock the vault and try again.")
             return
         }
         let panel = NSSavePanel()
@@ -334,9 +506,9 @@ struct ActivityDetailView: View {
         try? data.write(to: url)
     }
 
-    private func detailRow(_ key: String, _ value: String) -> some View {
+    private func detailRow(_ key: LocalizedStringResource, _ value: String) -> some View {
         KeyValueRow(key, keyWidth: 90) {
-            Text(value).font(.callout.monospaced()).textSelection(.enabled)
+            Text(verbatim: value).font(.callout.monospaced()).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 // Limit untrusted previews to the fixed-width sheet.
                 .lineLimit(12)
@@ -345,34 +517,71 @@ struct ActivityDetailView: View {
 }
 
 enum TimeFormat {
-    // Reuse immutable formatters across rows.
-    nonisolated(unsafe) private static let iso = ISO8601DateFormatter()
-    nonisolated(unsafe) private static let isoFrac: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    private static let hms: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
-    private static let medium: DateFormatter = { let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .medium; return f }()
-    private static let dayOnly: DateFormatter = { let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; return f }()
-
     /// Parses timestamps with or without fractional seconds.
     private static func parse(_ rfc3339: String) -> Date? {
-        isoFrac.date(from: rfc3339) ?? iso.date(from: rfc3339)
+        try? Date(rfc3339, strategy: .iso8601)
     }
 
     static func clock(_ rfc3339: String) -> String {
-        guard let date = parse(rfc3339) else { return String(rfc3339.suffix(8).prefix(8)) }
-        return hms.string(from: date)
+        clock(rfc3339, locale: .autoupdatingCurrent)
     }
-    static func full(_ rfc3339: String) -> String {
+
+    /// Uses the locale's preferred hour cycle, including the user's 12/24-hour override.
+    static func clock(
+        _ rfc3339: String,
+        locale: Locale,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String {
         guard let date = parse(rfc3339) else { return rfc3339 }
-        return medium.string(from: date)
+        return date.formatted(
+            Date.FormatStyle(
+                date: .omitted,
+                time: .standard,
+                locale: locale,
+                timeZone: timeZone
+            )
+        )
     }
+
+    static func full(_ rfc3339: String) -> String {
+        full(rfc3339, locale: .autoupdatingCurrent)
+    }
+
+    static func full(
+        _ rfc3339: String,
+        locale: Locale,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String {
+        guard let date = parse(rfc3339) else { return rfc3339 }
+        return date.formatted(
+            Date.FormatStyle(
+                date: .abbreviated,
+                time: .standard,
+                locale: locale,
+                timeZone: timeZone
+            )
+        )
+    }
+
     /// Formats a date without its time.
     static func day(_ rfc3339: String) -> String {
+        day(rfc3339, locale: .autoupdatingCurrent)
+    }
+
+    static func day(
+        _ rfc3339: String,
+        locale: Locale,
+        timeZone: TimeZone = .autoupdatingCurrent
+    ) -> String {
         guard let date = parse(rfc3339) else { return rfc3339 }
-        return dayOnly.string(from: date)
+        return date.formatted(
+            Date.FormatStyle(
+                date: .abbreviated,
+                time: .omitted,
+                locale: locale,
+                timeZone: timeZone
+            )
+        )
     }
 }
 

@@ -7,14 +7,19 @@ struct SallyportApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model: AppModel
     @State private var updater = SoftwareUpdater()
+    private let runningLanguage: AppLanguage
 
     init() {
+        runningLanguage = AppLanguagePreference.current
         let model = AppModel()
         if CommandLine.arguments.contains("--demo") {
             model.loadDemo()
         } else {
             // Start the runtime before any scene appears.
             model.startConnecting()
+        }
+        if CommandLine.arguments.contains("--show-settings") {
+            model.selectedTab = .settings
         }
         _model = State(initialValue: model)
     }
@@ -30,7 +35,8 @@ struct SallyportApp: App {
 
         // WindowGroup keeps MenuBarExtra responsive after the main window closes.
         WindowGroup("Sallyport", id: "main") {
-            RootWindowView(model: model)
+            RootWindowView(model: model, updater: updater,
+                           runningLanguage: runningLanguage)
                 // startConnecting is idempotent.
                 .task { if !model.isDemo { model.startConnecting() } }
         }
@@ -45,6 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--demo") {
             NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+        } else if CommandLine.arguments.contains("--show-settings") {
+            // Language changes relaunch directly into Settings without adding a Dock icon.
+            NSApp.setActivationPolicy(.accessory)
             NSApp.activate(ignoringOtherApps: true)
         } else {
             NSApp.setActivationPolicy(.accessory)

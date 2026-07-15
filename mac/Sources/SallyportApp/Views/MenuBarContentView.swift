@@ -19,8 +19,12 @@ struct MenuBarContentView: View {
             if !model.pending.isEmpty {
                 if model.pending.count > 1 {
                     HStack(spacing: Theme.Spacing.xs + 2) {
-                        Image(systemName: "square.stack.3d.up.fill").font(.caption2)
-                        Text("\(model.pending.count) requests waiting").fontWeight(.medium)
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                        Text("\(model.pending.count) requests waiting",
+                             comment: "Number of approval requests waiting in the menu bar. Configure plural variations for the request count.")
+                            .fontWeight(.medium)
                         Spacer()
                         Text("newest first").font(.caption2).foregroundStyle(.tertiary)
                     }
@@ -63,7 +67,7 @@ struct MenuBarContentView: View {
                 .font(.headline)
                 .foregroundStyle(model.vault.locked ? Theme.warning
                                  : (model.hasPendingApproval ? Theme.warning : Theme.accent))
-            Text("Sallyport").font(.headline)
+            Text(verbatim: "Sallyport").font(.headline)
             Spacer()
             connectionDot
         }
@@ -86,7 +90,7 @@ struct MenuBarContentView: View {
                 if model.vault.locked {
                     Text("Vault locked").font(.callout)
                     if let err = model.vaultUnlockError {
-                        Text(err).font(.caption2).foregroundStyle(Theme.danger)
+                        Text(verbatim: err).font(.caption2).foregroundStyle(Theme.danger)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -95,7 +99,7 @@ struct MenuBarContentView: View {
                     Text("Vault unlocked").font(.callout)
                     // Refresh the auto-lock countdown each second.
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        StatusPill(model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date),
+                        StatusPill(verbatim: model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date),
                                    systemImage: "timer", tint: Theme.verified, style: .mono)
                     }
                     Spacer()
@@ -108,7 +112,7 @@ struct MenuBarContentView: View {
                 Divider().padding(.horizontal, Theme.Spacing.md)
 
                 HStack {
-                    SectionHeader("Active sessions")
+                    SectionHeader(LocalizedStringResource("Active sessions"))
                     Spacer()
                     Button("All…") { open(.sessions) }
                         .buttonStyle(.plain).font(.caption).foregroundStyle(Theme.accent)
@@ -128,7 +132,7 @@ struct MenuBarContentView: View {
 
             Divider().padding(.horizontal, Theme.Spacing.md)
 
-            SectionHeader("Live activity")
+            SectionHeader(LocalizedStringResource("Live activity"))
                 .padding(.horizontal, Theme.Spacing.lg)
                 .padding(.top, Theme.Spacing.md).padding(.bottom, Theme.Spacing.sm)
 
@@ -163,73 +167,36 @@ struct MenuBarContentView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
-            MenuRowButton(title: "Open activity feed…", symbol: "list.bullet.rectangle", shortcut: "L") { open(.activity) }
-            MenuRowButton(title: "Manage…", symbol: "slider.horizontal.3", shortcut: "M") { open(.keys) }
-            MenuRowButton(title: "Settings…", symbol: "gearshape") { open(.settings) }
-            MenuRowButton(title: "Integrations…", symbol: "puzzlepiece.extension") { open(.integrations) }
+            MenuRowButton(title: LocalizedStringResource("Open activity feed…"),
+                          symbol: "list.bullet.rectangle", shortcut: "L") { open(.activity) }
+            MenuRowButton(title: LocalizedStringResource("Manage…"),
+                          symbol: "slider.horizontal.3", shortcut: "M") { open(.keys) }
+            MenuRowButton(title: LocalizedStringResource("Settings…"),
+                          symbol: "gearshape") { open(.settings) }
+            MenuRowButton(title: LocalizedStringResource("Integrations…"),
+                          symbol: "puzzlepiece.extension") { open(.integrations) }
             // Hide onboarding after setup completes.
             if !model.onboarding.allDone {
-                MenuRowButton(title: "Setup…", symbol: "sparkles") { open(.setup) }
+                MenuRowButton(title: LocalizedStringResource("Setup…"),
+                              symbol: "sparkles") { open(.setup) }
             }
             Divider().padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.xs)
-            if updater?.canCheck == true {
-                MenuRowButton(title: "Check for Updates…", symbol: "arrow.down.circle") {
+            if updater?.isAvailable == true {
+                MenuRowButton(title: LocalizedStringResource("Check for Updates…"),
+                              symbol: "arrow.down.circle") {
                     updater?.checkForUpdates()
                     dismissMenuBarPopover()
                 }
+                .disabled(updater?.canCheck != true)
             }
-            MenuRowButton(title: "About Sallyport", symbol: "info.circle") {
-                showAbout()
-                dismissMenuBarPopover()
+            MenuRowButton(title: LocalizedStringResource("About Sallyport"), symbol: "info.circle") {
+                open(.about)
             }
-            MenuRowButton(title: "Quit Sallyport", symbol: "power") {
+            MenuRowButton(title: LocalizedStringResource("Quit Sallyport"), symbol: "power") {
                 NSApplication.shared.terminate(nil)
             }
         }
         .padding(.vertical, Theme.Spacing.xs)
-    }
-
-    /// Opens the standard macOS About panel.
-    private func showAbout() {
-        // Credits support links; the copyright field does not.
-        let centered: NSMutableParagraphStyle = { let p = NSMutableParagraphStyle(); p.alignment = .center; return p }()
-        let credits = NSMutableAttributedString(
-            string: "Stores credentials and uses them for configured agent actions without returning them to the agent.\n\n",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .paragraphStyle: centered,
-            ])
-        var authorAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11),
-            .paragraphStyle: centered,
-        ]
-        if let authorURL = AboutView.authorURL {
-            authorAttributes[.link] = authorURL
-        }
-        credits.append(NSAttributedString(
-            string: "Oleg Sotnikov",
-            attributes: authorAttributes))
-        var sourceAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11),
-            .paragraphStyle: centered,
-        ]
-        if let sourceURL = AboutView.sourceURL {
-            sourceAttributes[.link] = sourceURL
-        }
-        credits.append(NSAttributedString(
-            string: "\n",
-            attributes: [.font: NSFont.systemFont(ofSize: 11), .paragraphStyle: centered]))
-        credits.append(NSAttributedString(
-            string: "Source code",
-            attributes: sourceAttributes))
-        let options: [NSApplication.AboutPanelOptionKey: Any] = [
-            .applicationName: "Sallyport",
-            .credits: credits,
-            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): "© 2025-2026 AppMaster",
-        ]
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(options: options)
     }
 
     private func open(_ tab: MainTab) {
@@ -248,7 +215,7 @@ struct MenuBarContentView: View {
         for window in NSApp.windows where window.canBecomeMain {
             let cls = String(describing: type(of: window))
             if cls.contains("MenuBarExtra") || cls.contains("StatusBar") { continue }
-            if window.title.localizedCaseInsensitiveContains("approval") { continue }
+            if window.identifier == ApprovalPanelController.windowIdentifier { continue }
             window.makeKeyAndOrderFront(nil)
             return true
         }
@@ -277,19 +244,19 @@ struct MenuBarContentView: View {
         case .disconnected: return .secondary
         }
     }
-    private var connectionLabel: String {
+    private var connectionLabel: LocalizedStringResource {
         switch model.connection {
-        case .connected: return "Connected"
-        case .connecting: return "Starting…"
-        case .waiting: return "Setup needed"
-        case .disconnected: return "Offline"
+        case .connected: return LocalizedStringResource("Connected")
+        case .connecting: return LocalizedStringResource("Starting…")
+        case .waiting: return LocalizedStringResource("Setup needed")
+        case .disconnected: return LocalizedStringResource("Offline")
         }
     }
 }
 
 /// Menu navigation row with a hover state and optional shortcut.
 private struct MenuRowButton: View {
-    let title: String
+    let title: LocalizedStringResource
     let symbol: String
     var shortcut: Character?
     let action: () -> Void
@@ -302,7 +269,7 @@ private struct MenuRowButton: View {
                 Text(title)
                 Spacer()
                 if let shortcut {
-                    Text("⌘\(String(shortcut))").foregroundStyle(.tertiary).font(.caption)
+                    Text(verbatim: "⌘\(String(shortcut))").foregroundStyle(.tertiary).font(.caption)
                 }
             }
             .padding(.horizontal, Theme.Spacing.sm)
@@ -335,15 +302,18 @@ private struct MenuSessionRow: View {
                     .font(.caption)
                     .foregroundStyle(session.signed ? Theme.verified : Theme.danger)
                     .frame(width: 18)
-                Text(session.displayName).font(.callout).lineLimit(1)
-                StatusPill(session.status,
-                           tint: session.status == "approved" ? Theme.verified
-                               : (session.status == "per-call" ? Theme.warning : .secondary))
+                Text(verbatim: session.displayName).font(.callout).lineLimit(1)
+                if let localizedStatus {
+                    StatusPill(localizedStatus, tint: statusTint)
+                } else {
+                    StatusPill(verbatim: session.status, tint: statusTint)
+                }
                 Spacer()
                 if missed {
                     Text("no window (headless)").font(.caption2).foregroundStyle(.tertiary)
                 } else {
-                    Text("\(session.calls) \(session.calls == 1 ? "call" : "calls")")
+                    Text("\(session.calls) calls",
+                         comment: "Number of calls made during an agent session. Configure plural variations for the call count.")
                         .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                     Image(systemName: "macwindow.and.cursorarrow")
                         .font(.caption)
@@ -365,17 +335,38 @@ private struct MenuSessionRow: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.1), value: hovering)
     }
+
+    /// Keeps protocol status tokens stable while presenting known states in the user's language.
+    private var localizedStatus: LocalizedStringResource? {
+        switch session.status {
+        case "approved":
+            LocalizedStringResource("Approved", comment: "Agent session status")
+        case "per-call":
+            LocalizedStringResource("Per call", comment: "Agent session status: every call needs approval")
+        case "observed":
+            LocalizedStringResource("Observed", comment: "Agent session status: activity is recorded without approval")
+        default: nil
+        }
+    }
+
+    private var statusTint: Color {
+        switch session.status {
+        case "approved": Theme.verified
+        case "per-call": Theme.warning
+        default: .secondary
+        }
+    }
 }
 
 private struct MenuActivityRow: View {
     let row: ActivityRow
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
-            Text(TimeFormat.clock(row.ts)).font(.caption2.monospaced()).foregroundStyle(.secondary)
+            Text(verbatim: TimeFormat.clock(row.ts)).font(.caption2.monospaced()).foregroundStyle(.secondary)
                 .frame(width: 54, alignment: .leading)
-            Text(row.identity.replacingOccurrences(of: "agent://", with: ""))
+            Text(verbatim: row.identity.replacingOccurrences(of: "agent://", with: ""))
                 .font(.caption).lineLimit(1).frame(width: 92, alignment: .leading)
-            Text(row.tool).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(verbatim: row.tool).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Spacer()
             DecisionBadge(decision: row.decision, isError: row.isError)
         }

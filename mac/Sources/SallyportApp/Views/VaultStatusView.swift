@@ -12,8 +12,8 @@ struct VaultStatusView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader(
-                title: "Vault and keys",
-                subtitle: "Lock state, hardware protection, and cryptographic keys.",
+                title: LocalizedStringResource("Vault and keys"),
+                subtitle: LocalizedStringResource("Lock state, hardware protection, and cryptographic keys."),
                 symbol: "lock.rectangle.stack"
             ) {
                 if model.vault.locked {
@@ -27,7 +27,11 @@ struct VaultStatusView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                     if let err = model.vaultUnlockError {
-                        Label(err, systemImage: "exclamationmark.triangle.fill")
+                        Label {
+                            Text(verbatim: err)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                        }
                             .font(.callout)
                             .foregroundStyle(Theme.danger)
                             .fixedSize(horizontal: false, vertical: true)
@@ -55,7 +59,8 @@ struct VaultStatusView: View {
     /// Opens the confirmation flow for permanently erasing the vault.
     private var dangerZoneCard: some View {
         Card {
-            SectionHeader("Danger zone", systemImage: "exclamationmark.octagon")
+            SectionHeader(LocalizedStringResource("Danger zone"),
+                          systemImage: "exclamationmark.octagon")
             HStack(alignment: .top, spacing: Theme.Spacing.md) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Erase the vault and start over").font(.callout.weight(.medium))
@@ -63,10 +68,12 @@ struct VaultStatusView: View {
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                .layoutPriority(1)
                 Spacer(minLength: Theme.Spacing.sm)
                 Button("Erase…", systemImage: "trash") { showingReset = true }
                     .buttonStyle(.bordered)
                     .tint(Theme.danger)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
     }
@@ -79,18 +86,17 @@ struct VaultStatusView: View {
                     .foregroundStyle(model.vault.tint)
                     .frame(width: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.vault.locked ? "Vault locked" : "Vault unlocked")
+                    Text(vaultStateTitle)
                         .font(.headline)
-                    Text(model.vault.locked
-                         ? "Unlock to let bound credentials be used."
-                         : "Your stored keys work while unlocked.")
+                    Text(vaultStateSubtitle)
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 if !model.vault.locked {
                     // Limit the one-second refresh to the countdown pill.
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        StatusPill(model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date),
+                        StatusPill(verbatim: model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date),
                                    systemImage: "timer", tint: Theme.verified, style: .mono)
                     }
                 }
@@ -100,7 +106,7 @@ struct VaultStatusView: View {
 
     private var hardwareGateCard: some View {
         Card {
-            SectionHeader("Hardware gate", systemImage: "lock.shield")
+            SectionHeader(LocalizedStringResource("Hardware gate"), systemImage: "lock.shield")
             if model.isHardwareGated {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "checkmark.shield.fill").foregroundStyle(Theme.verified)
@@ -110,8 +116,9 @@ struct VaultStatusView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .layoutPriority(1)
                     Spacer()
-                    StatusPill("Secure Enclave", tint: Theme.verified)
+                    StatusPill(LocalizedStringResource("Secure Enclave"), tint: Theme.verified)
                 }
             } else {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
@@ -132,7 +139,7 @@ struct VaultStatusView: View {
                             .font(.caption2).foregroundStyle(.tertiary)
                     }
                     if let gateError {
-                        Text(gateError).font(.caption).foregroundStyle(Theme.danger)
+                        Text(verbatim: gateError).font(.caption).foregroundStyle(Theme.danger)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -151,20 +158,20 @@ struct VaultStatusView: View {
         gateBusy = true
         Task {
             do { try await model.enableHardwareGate() }
-            catch { gateError = "\(error)" }
+            catch { gateError = error.localizedDescription }
             gateBusy = false
         }
     }
 
     private var trustCard: some View {
         Card {
-            SectionHeader("Key storage", systemImage: "checkmark.seal")
+            SectionHeader(LocalizedStringResource("Key storage"), systemImage: "checkmark.seal")
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: model.backend == .secureEnclave ? "cpu.fill" : "desktopcomputer")
                     .foregroundStyle(model.backend == .secureEnclave ? Theme.verified : Theme.warning)
-                Text(model.backend.displayName).fontWeight(.medium)
+                Text(model.backendDisplayName).fontWeight(.medium)
                 Spacer()
-                StatusPill(model.backend == .secureEnclave ? "hardware" : "software",
+                StatusPill(backendProtectionStatus,
                            tint: model.backend == .secureEnclave ? Theme.verified : Theme.warning)
             }
             if model.backend == .software {
@@ -178,23 +185,46 @@ struct VaultStatusView: View {
     /// Lists the keys used by the current vault and audit implementation.
     private var rootKeysCard: some View {
         Card {
-            SectionHeader("Root keys", systemImage: "key.fill")
-            keyRow("K-wrap", "P-256 ECDH · Secure Enclave · opens the vault identity after Touch ID; the identity unwraps the DEK")
-            keyRow("DEK", "256-bit ChaCha20-Poly1305 · memory only while unlocked · encrypts stored secrets and metadata")
-            keyRow("Audit recipient", "P-256 ECIES · encrypts audit rows for this vault")
-            keyRow("Audit signer", "Separate P-256 ECDSA key · signs audit rows, not approval decisions")
+            SectionHeader(LocalizedStringResource("Root keys"), systemImage: "key.fill")
+            keyRow(Text(verbatim: "K-wrap"), LocalizedStringResource(
+                "P-256 ECDH · Secure Enclave · opens the vault identity after Touch ID; the identity unwraps the DEK"))
+            keyRow(Text(verbatim: "DEK"), LocalizedStringResource(
+                "256-bit ChaCha20-Poly1305 · memory only while unlocked · encrypts stored secrets and metadata"))
+            keyRow(Text("Audit recipient"), LocalizedStringResource(
+                "P-256 ECIES · encrypts audit rows for this vault"))
+            keyRow(Text("Audit signer"), LocalizedStringResource(
+                "Separate P-256 ECDSA key · signs audit rows, not approval decisions"))
         }
     }
 
-    private func keyRow(_ name: String, _ desc: String) -> some View {
+    private func keyRow(_ name: Text, _ desc: LocalizedStringResource) -> some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             Image(systemName: "key.fill").foregroundStyle(Theme.accent).font(.caption).frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name).font(.callout.monospaced()).fontWeight(.medium)
+                name.font(.callout.monospaced()).fontWeight(.medium)
                 Text(desc).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }
+    }
+
+    private var vaultStateTitle: LocalizedStringResource {
+        model.vault.locked
+            ? LocalizedStringResource("Vault locked")
+            : LocalizedStringResource("Vault unlocked")
+    }
+
+    private var vaultStateSubtitle: LocalizedStringResource {
+        model.vault.locked
+            ? LocalizedStringResource("Unlock to let bound credentials be used.")
+            : LocalizedStringResource("Your stored keys work while unlocked.")
+    }
+
+    private var backendProtectionStatus: LocalizedStringResource {
+        model.backend == .secureEnclave
+            ? LocalizedStringResource("Hardware")
+            : LocalizedStringResource("Software")
     }
 }
 
@@ -227,13 +257,21 @@ private struct ResetVaultSheet: View {
     @State private var isBusy = false
     @State private var error: String?
 
+    private let erasedItems: [LocalizedStringResource] = [
+        LocalizedStringResource("API keys, SSH private keys, and OAuth tokens"),
+        LocalizedStringResource("SSH hosts, MCP servers, and allowlist entries"),
+        LocalizedStringResource("Security settings"),
+        LocalizedStringResource("Audit history and session recordings")
+    ]
+
     private var phrase: String { AppModel.resetConfirmationPhrase }
     private var matches: Bool {
-        typed.trimmingCharacters(in: .whitespaces).uppercased() == phrase
+        AppModel.resetConfirmationMatches(typed, phrase: phrase)
     }
 
     var body: some View {
-        SheetScaffold("Erase the vault", systemImage: "exclamationmark.octagon.fill", width: 520) {
+        SheetScaffold(LocalizedStringResource("Erase the vault"),
+                      systemImage: "exclamationmark.octagon.fill", width: 520) {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 HStack(alignment: .top, spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -253,28 +291,36 @@ private struct ResetVaultSheet: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("The reset erases:").font(.callout.weight(.medium))
-                    ForEach(["API keys, SSH private keys, and OAuth tokens",
-                             "SSH hosts, MCP servers, and allowlist entries",
-                             "Security settings",
-                             "Audit history and session recordings"], id: \.self) { line in
-                        Label(line, systemImage: "minus")
+                    ForEach(erasedItems.indices, id: \.self) { index in
+                        Label {
+                            Text(erasedItems[index])
+                        } icon: {
+                            Image(systemName: "minus")
+                        }
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                FormRow(label: "Type to confirm",
-                        hint: "Type the phrase exactly, in capitals.",
+                FormRow(label: LocalizedStringResource("Type to confirm"),
+                        hint: LocalizedStringResource("Type the phrase exactly as shown."),
                         isRequired: true,
-                        error: (!typed.isEmpty && !matches) ? "That is not the phrase." : nil) {
-                    TextField(phrase, text: $typed)
+                        error: (!typed.isEmpty && !matches)
+                            ? String(localized: "That is not the phrase.") : nil) {
+                    TextField(text: $typed, prompt: Text(verbatim: phrase)) {
+                        Text("Confirmation phrase")
+                    }
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .invalidField(!typed.isEmpty && !matches)
                 }
 
                 if let error {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                    Label {
+                        Text(verbatim: error)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
                         .font(.caption).foregroundStyle(Theme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }

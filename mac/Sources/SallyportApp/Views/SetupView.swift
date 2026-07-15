@@ -22,11 +22,11 @@ struct SetupView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScreenHeader(
-                title: "Setup",
-                subtitle: "Create a vault and connect an agent.",
+                title: LocalizedStringResource("Setup"),
+                subtitle: LocalizedStringResource("Create a vault and connect an agent."),
                 symbol: Theme.gateCalm
             ) {
-                StatusPill("\(doneCount) / 3",
+                StatusPill(verbatim: "\(doneCount) / 3",
                            systemImage: model.onboarding.allDone ? "checkmark.seal.fill" : "circle.dashed",
                            tint: model.onboarding.allDone ? Theme.verified : Theme.accent)
             }
@@ -37,7 +37,7 @@ struct SetupView: View {
                     stepsCard
                     finishCard
                 }
-                .frame(maxWidth: 620)
+                .frame(maxWidth: 720)
                 .frame(maxWidth: .infinity)
                 .padding(Theme.screenPadding)
             }
@@ -54,8 +54,8 @@ struct SetupView: View {
             do {
                 try await model.ensureVaultCreated()
                 toast = .ok(model.backend == .secureEnclave
-                            ? "Vault created with Secure Enclave and Touch ID protection."
-                            : "Vault ready.")
+                            ? String(localized: "Vault created with Secure Enclave and Touch ID protection.")
+                            : String(localized: "Vault ready."))
             } catch { toast = .bad(describe(error)) }
             runningStep = nil
         }
@@ -69,12 +69,11 @@ struct SetupView: View {
                     .foregroundStyle(Theme.accent)
                     .frame(width: 34)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(model.onboarding.allDone ? "Setup complete" : "Set up Sallyport")
+                    Text(progressTitle)
                         .font(.headline)
-                    Text(model.onboarding.allDone
-                         ? "All three steps are done."
-                         : "\(doneCount) of 3 complete. Continue with the highlighted step.")
+                    Text(progressDetail)
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
             }
@@ -85,12 +84,12 @@ struct SetupView: View {
     private var stepsCard: some View {
         Card(spacing: 0) {
             SetupStep(
-                number: 1, title: "Create vault",
+                number: 1, title: LocalizedStringResource("Create vault"),
                 subtitle: createSubtitle,
                 done: model.onboarding.vaultCreated,
                 isActive: activeIndex == 0,
                 inProgress: runningStep == 0,
-                actionTitle: "Create"
+                actionTitle: LocalizedStringResource("Create")
             ) {
                 createVault()
             }
@@ -98,33 +97,35 @@ struct SetupView: View {
             Divider().padding(.vertical, Theme.Spacing.xs)
 
             SetupStep(
-                number: 2, title: "Start Sallyport",
-                subtitle: "Starts the local agent socket and vault service in this app.",
+                number: 2, title: LocalizedStringResource("Start Sallyport"),
+                subtitle: LocalizedStringResource("Starts the local agent socket and vault service in this app."),
                 done: model.onboarding.agentInstalled,
                 isActive: activeIndex == 1,
-                actionTitle: "Start"
+                actionTitle: LocalizedStringResource("Start")
             ) { model.connect() }
 
             Divider().padding(.vertical, Theme.Spacing.xs)
 
             SetupStep(
-                number: 3, title: "Connect your agent",
+                number: 3, title: LocalizedStringResource("Connect your agent"),
                 subtitle: connectSubtitle,
                 done: model.onboarding.agentConnected,
                 isActive: activeIndex == 2,
-                actionTitle: "Integrations"
+                actionTitle: LocalizedStringResource("Integrations")
             ) { model.selectedTab = .integrations }
         }
     }
 
-    private var createSubtitle: String {
+    private var createSubtitle: LocalizedStringResource {
         if model.runtime.incompatibleVault {
-            return "An incompatible vault was found. Creating a new vault archives the old files."
+            return LocalizedStringResource(
+                "An incompatible vault was found. Creating a new vault archives the old files.")
         }
         if model.backend == .secureEnclave {
-            return "Secure Enclave and Touch ID gate vault unlock. There is no recovery if the Secure Enclave key is lost."
+            return LocalizedStringResource(
+                "Secure Enclave and Touch ID gate vault unlock. There is no recovery if the Secure Enclave key is lost.")
         }
-        return "This development build stores the vault key in software."
+        return LocalizedStringResource("This development build stores the vault key in software.")
     }
 
     private var finishCard: some View {
@@ -133,8 +134,9 @@ struct SetupView: View {
                 Label("Setup complete.", systemImage: "checkmark.seal.fill")
                     .font(.callout).foregroundStyle(Theme.verified)
             } else {
-                Text("\(doneCount) of 3 complete")
+                Text(finishProgress)
                     .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button("Done") { model.selectedTab = .approvals }
@@ -144,18 +146,42 @@ struct SetupView: View {
         }
     }
 
-    private var connectSubtitle: String {
+    private var connectSubtitle: LocalizedStringResource {
         if model.onboarding.agentConnected {
-            return "An agent has completed its first call."
+            return LocalizedStringResource("An agent has completed its first call.")
         }
         switch model.connection {
         case .connected:
-            return "Copy the integration snippet for your client. This step completes after the first agent call."
+            return LocalizedStringResource(
+                "Copy the integration snippet for your client. This step completes after the first agent call.")
         case .connecting:
-            return "Starting Sallyport…"
+            return LocalizedStringResource("Starting Sallyport…")
         case .waiting, .disconnected:
-            return "Create the vault first. The agent socket starts after that."
+            return LocalizedStringResource("Create the vault first. The agent socket starts after that.")
         }
+    }
+
+    private var progressTitle: LocalizedStringResource {
+        model.onboarding.allDone
+            ? LocalizedStringResource("Setup complete")
+            : LocalizedStringResource("Set up Sallyport")
+    }
+
+    private var progressDetail: LocalizedStringResource {
+        guard !model.onboarding.allDone else {
+            return LocalizedStringResource("All three steps are done.")
+        }
+        let count = doneCount
+        return LocalizedStringResource(
+            "\(count) of 3 complete. Continue with the highlighted step.",
+            comment: "Setup progress. The first number is the completed step count.")
+    }
+
+    private var finishProgress: LocalizedStringResource {
+        let count = doneCount
+        return LocalizedStringResource(
+            "\(count) of 3 complete",
+            comment: "Compact setup progress. The first number is the completed step count.")
     }
 }
 
@@ -179,14 +205,14 @@ private struct ProgressPips: View {
 /// One setup step and its current state.
 private struct SetupStep: View {
     let number: Int
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringResource
+    let subtitle: LocalizedStringResource
     let done: Bool
     let isActive: Bool
     var inProgress: Bool = false
-    let actionTitle: String
+    let actionTitle: LocalizedStringResource
     /// Optional secondary action available after completion.
-    var doneActionTitle: String? = nil
+    var doneActionTitle: LocalizedStringResource? = nil
     let action: () -> Void
 
     var body: some View {
@@ -202,7 +228,7 @@ private struct SetupStep: View {
                 if done {
                     Image(systemName: "checkmark").foregroundStyle(Theme.verified).fontWeight(.bold)
                 } else {
-                    Text("\(number)").fontWeight(.semibold)
+                    Text(verbatim: "\(number)").fontWeight(.semibold)
                         .foregroundStyle(isActive ? Theme.accent : .secondary)
                 }
             }
@@ -213,10 +239,11 @@ private struct SetupStep: View {
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: Theme.Spacing.sm)
 
-            trailing
+            trailing.fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.md)

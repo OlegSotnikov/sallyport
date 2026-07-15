@@ -4,6 +4,8 @@ import SallyportKit
 /// Main window with a sidebar and detail pane.
 struct RootWindowView: View {
     @Bindable var model: AppModel
+    var updater: SoftwareUpdater? = nil
+    var runningLanguage: AppLanguage = AppLanguagePreference.current
 
     var body: some View {
         // A fixed HStack avoids sidebar collapse in a menu-bar accessory window.
@@ -29,7 +31,7 @@ struct RootWindowView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     ForEach(MainTab.Section.allCases) { section in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(section.rawValue)
+                            Text(section.title)
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, Theme.Spacing.sm + 6)
@@ -48,7 +50,7 @@ struct RootWindowView: View {
             }
             VaultFootnote(model: model)
         }
-        .frame(width: 216)
+        .frame(width: 240)
         .background(.bar)
     }
 
@@ -80,30 +82,28 @@ struct RootWindowView: View {
                                     onUnlock: model.unlockForEditing)
         case .integrations: IntegrationsView()
         case .vault: VaultStatusView(model: model)
-        case .settings: SettingsView(model: model)
+        case .settings: SettingsView(model: model, runningLanguage: runningLanguage)
         case .setup: SetupView(model: model)
-        case .about: AboutView()
+        case .about: AboutView(updater: updater)
         }
     }
 
     @ViewBuilder private var approvals: some View {
         VStack(spacing: 0) {
             ScreenHeader(
-                title: "Approvals",
-                subtitle: model.pending.isEmpty
-                    ? "No requests are waiting."
-                    : "\(model.pending.count) \(model.pending.count == 1 ? "request" : "requests") waiting for your decision.",
+                title: LocalizedStringResource("Approvals"),
+                subtitle: approvalsSubtitle,
                 symbol: "checkmark.shield"
             ) {
                 if !model.pending.isEmpty {
-                    StatusPill("\(model.pending.count) pending", tint: Theme.warning)
+                    StatusPill(pendingStatus, tint: Theme.warning)
                 }
             }
             Divider()
             if model.pending.isEmpty {
                 EmptyStateView(
-                    title: "No approvals waiting",
-                    message: "Requests that require approval appear here and in the menu bar.",
+                    title: LocalizedStringResource("No approvals waiting"),
+                    message: LocalizedStringResource("Requests that require approval appear here and in the menu bar."),
                     symbol: "checkmark.shield")
             } else {
                 ScrollView {
@@ -120,6 +120,23 @@ struct RootWindowView: View {
                 }
             }
         }
+    }
+
+    private var approvalsSubtitle: LocalizedStringResource {
+        guard !model.pending.isEmpty else {
+            return LocalizedStringResource("No requests are waiting.")
+        }
+        let count = model.pending.count
+        return LocalizedStringResource(
+            "\(count) requests waiting for your decision.",
+            comment: "Approval queue count. Configure plural variations for the request count.")
+    }
+
+    private var pendingStatus: LocalizedStringResource {
+        let count = model.pending.count
+        return LocalizedStringResource(
+            "\(count) pending requests",
+            comment: "Compact approval queue count. Configure plural variations for the request count.")
     }
 }
 
@@ -156,9 +173,11 @@ private struct SidebarRow: View {
                     .foregroundStyle(selected ? Color.accentColor : .secondary)
                 Text(tab.title)
                     .fontWeight(selected ? .medium : .regular)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: Theme.Spacing.xs)
                 if badge > 0 {
-                    Text("\(badge)")
+                    Text(verbatim: "\(badge)")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6).padding(.vertical, 1)
                         .background(Capsule().fill(Theme.danger))
@@ -189,14 +208,23 @@ private struct VaultFootnote: View {
         HStack(spacing: Theme.Spacing.xs + 2) {
             Image(systemName: model.vault.symbol).foregroundStyle(model.vault.tint).font(.caption)
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(model.vault.locked ? "Locked"
-                     : model.vault.ttlSec > 0
-                        ? "Unlocked · \(model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt, now: context.date))"
-                        : "Unlocked · no auto-lock")
-                    .font(.caption).foregroundStyle(.secondary)
+                if model.vault.locked {
+                    Text("Locked")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if model.vault.ttlSec > 0 {
+                    let remaining = model.vault.ttlClock(anchoredAt: model.vaultUpdatedAt,
+                                                         now: context.date)
+                    Text(LocalizedStringResource(
+                        "Unlocked · \(remaining)",
+                        comment: "Vault state followed by a localized remaining-time value."))
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Unlocked · no auto-lock")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            Text(model.backend.displayName).font(.caption2).foregroundStyle(.tertiary)
+            Text(model.backendDisplayName).font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
         .background(.bar)

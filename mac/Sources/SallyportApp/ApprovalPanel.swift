@@ -6,6 +6,9 @@ import SallyportKit
 /// Closing the panel leaves the request pending.
 @MainActor
 final class ApprovalPanelController: NSObject, NSWindowDelegate {
+    /// Stable identity used to keep the approval panel out of main-window routing.
+    static let windowIdentifier = NSUserInterfaceItemIdentifier("dev.sallyport.mac.approval-panel")
+
     private var window: NSWindow?
 
     /// Updates the panel on the next run-loop turn to avoid re-entering SwiftUI updates.
@@ -27,7 +30,8 @@ final class ApprovalPanelController: NSObject, NSWindowDelegate {
                 backing: .buffered, defer: false)
             w.titlebarAppearsTransparent = true
             w.titleVisibility = .hidden
-            w.title = "Approval required"
+            w.title = String(localized: "Approval required")
+            w.identifier = Self.windowIdentifier
             w.isReleasedWhenClosed = false
             w.level = .floating
             w.hidesOnDeactivate = false
@@ -79,9 +83,13 @@ private struct ApprovalPanelContent: View {
                         .padding(Theme.Spacing.md)
                 }
                 if model.pending.count > 1 {
+                    let remaining = model.pending.count - 1
                     HStack(spacing: Theme.Spacing.xs + 2) {
-                        Image(systemName: "square.stack.3d.up.fill").font(.caption2)
-                        Text("\(model.pending.count - 1) more requests")
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .font(.caption2)
+                            .accessibilityHidden(true)
+                        Text("\(remaining) more requests",
+                             comment: "Number of approval requests waiting behind the current request. Configure plural variations for the request count.")
                     }
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.horizontal, Theme.Spacing.lg).padding(.bottom, Theme.Spacing.sm)

@@ -66,7 +66,9 @@ struct ApprovalCardView: View {
         }
     }
 
-    private func contextStrip(icon: String, tint: Color, title: String, detail: String) -> some View {
+    private func contextStrip(icon: String, tint: Color,
+                              title: LocalizedStringResource,
+                              detail: LocalizedStringResource) -> some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             Image(systemName: icon).foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 1) {
@@ -89,14 +91,28 @@ struct ApprovalCardView: View {
             Image(systemName: signed ? "checkmark.seal.fill" : "exclamationmark.shield.fill")
                 .foregroundStyle(tint).font(.title3)
             VStack(alignment: .leading, spacing: 2) {
-                Text(signed ? "Valid code signature" : "No valid code signature")
-                    .font(.callout.weight(.semibold)).foregroundStyle(tint)
-                Text(signatureDetail(signed: signed, authority: authority))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                if signed {
+                    Text("Valid code signature")
+                        .font(.callout.weight(.semibold)).foregroundStyle(tint)
+                } else {
+                    Text("No valid code signature")
+                        .font(.callout.weight(.semibold)).foregroundStyle(tint)
+                }
+                if !authority.isEmpty {
+                    Text(verbatim: authority)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if signed {
+                    Text("Signed")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Approve only if you recognize this executable.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if let path = request.provenance.origin.path, !path.isEmpty {
-                    Text(path).font(Theme.Typography.monoSmall).foregroundStyle(.tertiary)
+                    Text(verbatim: path).font(Theme.Typography.monoSmall).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 }
             }
@@ -106,13 +122,6 @@ struct ApprovalCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(tint.opacity(0.22)))
-    }
-
-    private func signatureDetail(signed: Bool, authority: String) -> String {
-        if !authority.isEmpty { return authority }
-        return signed
-            ? "Signed"
-            : "Approve only if you recognize this executable."
     }
 
     /// Per-call approval applies to one action.
@@ -170,11 +179,11 @@ struct ApprovalCardView: View {
 
     private var actionBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text(ApprovalPresentation.toolLabel(request.action.tool))
+            toolLabel
                 .font(.caption).fontWeight(.semibold)
                 .foregroundStyle(.secondary)
             HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-                Text(request.action.channel == "ssh" ? "$" : "▸")
+                Text(verbatim: request.action.channel == "ssh" ? "$" : "▸")
                     .font(Theme.mono).foregroundStyle(.tertiary)
                 Text(highlightedCommand)
                     .font(Theme.mono)
@@ -187,7 +196,7 @@ struct ApprovalCardView: View {
 
             if let body = request.action.bodyPreview,
                request.action.channel != "ssh", !body.isEmpty {
-                Text(body)
+                Text(verbatim: body)
                     .font(Theme.Typography.monoSmall)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
@@ -197,12 +206,13 @@ struct ApprovalCardView: View {
     }
 
     private var whyLine: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs + 2) {
+        let reason = ApprovalCopy.reason(request.why.reason)
+        return HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs + 2) {
             Image(systemName: "info.circle").foregroundStyle(.secondary).font(.callout)
             (Text("Why: ").fontWeight(.medium)
-             + Text("rule ").foregroundStyle(.secondary)
-             + Text("`\(request.why.rule)`").font(.callout.monospaced())
-             + Text(" · \(request.why.reason)").foregroundStyle(.secondary))
+             + Text("Rule ").foregroundStyle(.secondary)
+             + Text(verbatim: "`\(request.why.rule)`").font(.callout.monospaced())
+             + Text(verbatim: " · \(reason)").foregroundStyle(.secondary))
                 .font(.callout)
                 .lineLimit(2)
         }
@@ -243,11 +253,20 @@ struct ApprovalCardView: View {
         .padding(.top, Theme.Spacing.xxs)
     }
 
-    private var approveLabel: String {
+    private var approveLabel: LocalizedStringResource {
         if isProcessing { return "Authorizing…" }
         if isSession { return "Approve agent" }
         if isPerCall { return "Approve call" }
         return "Approve"
+    }
+
+    private var toolLabel: Text {
+        switch request.action.tool {
+        case "http.request": Text("HTTP request")
+        case "ssh.exec": Text("SSH command")
+        case "sallyport.request_credential": Text("Credential request")
+        default: Text(verbatim: request.action.tool)
+        }
     }
 
     private func approve() {
@@ -260,7 +279,7 @@ struct ApprovalCardView: View {
 
     /// The command with danger tokens highlighted red.
     private var highlightedCommand: AttributedString {
-        let text = ApprovalPresentation.primaryActionText(request.action)
+        let text = ApprovalCopy.actionText(request.action)
         var attributed = AttributedString(text)
         for range in ApprovalPresentation.dangerRanges(in: text, tokens: request.action.dangerTokens) {
             let lower = text.distance(from: text.startIndex, to: range.lowerBound)

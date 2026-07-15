@@ -221,6 +221,8 @@ if [[ "${SP_NO_PREVIEWS:-0}" == "1" ]]; then
 	SWIFT_ARGS+=(-Xswiftc -DSP_NO_PREVIEWS)
 fi
 
+echo "==> verify localizations"
+"$ROOT/ci/verify-localizations.sh"
 echo "==> swift build ${SWIFT_ARGS[*]}"
 swift build "${SWIFT_ARGS[@]}"
 BIN_PATH="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
@@ -255,6 +257,15 @@ chmod +x "$APP/Contents/MacOS/$APP_NAME"
 # Copy the generated app icon.
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
+# Compile the app and privacy-purpose string catalogs into the main bundle.
+# SwiftUI resolves these strings through Bundle.main in the signed app.
+LOCALIZABLE_CATALOG="$ROOT/Sources/SallyportApp/Resources/Localizable.xcstrings"
+INFO_PLIST_CATALOG="$ROOT/Resources/InfoPlist.xcstrings"
+for catalog in "$LOCALIZABLE_CATALOG" "$INFO_PLIST_CATALOG"; do
+	[[ -f "$catalog" ]] || { echo "error: localization catalog not found: $catalog" >&2; exit 1; }
+	xcrun xcstringstool compile "$catalog" --output-directory "$APP/Contents/Resources"
+done
+
 # Copy both helpers next to the app executable.
 cp "$SP_SWIFT"              "$APP/Contents/MacOS/sp"
 cp "$CORE_DIR/bin/sp-ssh"   "$APP/Contents/MacOS/sp-ssh"
@@ -286,6 +297,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleShortVersionString</key> <string></string>
 	<key>CFBundleVersion</key>         <string></string>
 	<key>CFBundleInfoDictionaryVersion</key> <string>6.0</string>
+	<key>CFBundleDevelopmentRegion</key> <string>en</string>
 	<key>LSMinimumSystemVersion</key>  <string>14.0</string>
 	<!-- Menu-bar accessory only: no Dock icon, no default window. -->
 	<key>LSUIElement</key>             <true/>

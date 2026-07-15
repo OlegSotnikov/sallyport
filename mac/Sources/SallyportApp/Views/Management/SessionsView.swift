@@ -35,14 +35,18 @@ final class SessionsViewModel {
         catch { toast = .bad(describe(error)); return nil }
     }
     func addToAllowlist(_ item: AllowlistItem) async -> Bool {
-        do { try await mgmt.addAllowlist(item); toast = .ok("Allowlisted \(item.label)"); return true }
+        do {
+            try await mgmt.addAllowlist(item)
+            toast = .ok(String(localized: "Allowlisted \(item.label)"))
+            return true
+        }
         catch { toast = .bad(describe(error)); return false }
     }
 
     func revoke(_ s: SessionInfo) async {
         do {
             try await mgmt.revokeSession(key: s.key)
-            toast = .ok("Revoked session for \(s.displayName)")
+            toast = .ok(String(localized: "Revoked session for \(s.displayName)"))
             await load()
         } catch {
             toast = .bad(describe(error))
@@ -138,12 +142,12 @@ struct SessionsView: View {
         }
     }
 
-    private func sectionCard(_ title: String, count: Int, @ViewBuilder rows: @escaping () -> some View) -> some View {
+    private func sectionCard(_ title: LocalizedStringResource, count: Int, @ViewBuilder rows: @escaping () -> some View) -> some View {
         Card {
             HStack {
                 SectionHeader(title)
                 Spacer()
-                Text("\(count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(verbatim: "\(count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
             rows()
         }
@@ -153,15 +157,17 @@ struct SessionsView: View {
         let row = HStack(spacing: Theme.Spacing.md) {
             Image(systemName: s.signed ? "checkmark.seal.fill" : "exclamationmark.shield.fill")
                 .foregroundStyle(s.signed ? Theme.verified : Theme.danger)
-                .help(s.signed ? (s.signedBy ?? "Valid code signature") : "Unsigned or not verified")
+                .help(s.signed
+                    ? (s.signedBy ?? String(localized: "Valid code signature"))
+                    : String(localized: "Unsigned or not verified"))
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.Spacing.sm) {
-                    Text(s.displayName).fontWeight(.medium).textSelection(.enabled)
+                    Text(verbatim: s.displayName).fontWeight(.medium).textSelection(.enabled)
                     statusPill(s.status)
                 }
-                Text(subtitle(s, live: live))
+                Text(verbatim: subtitle(s, live: live))
                     .font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
@@ -169,10 +175,16 @@ struct SessionsView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
-                Text("\(s.calls) \(s.calls == 1 ? "call" : "calls")")
+                Text("\(s.calls) calls",
+                     comment: "Number of calls made during an agent session. Configure plural variations for the call count.")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                Text(live ? "since \(TimeFormat.clock(s.approvedAt))" : endLine(s))
-                    .font(.caption2).foregroundStyle(.tertiary)
+                if live {
+                    Text("Since \(TimeFormat.clock(s.approvedAt))")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    Text(endLine(s))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
 
             if live {
@@ -229,14 +241,13 @@ struct SessionsView: View {
         }
     }
 
-    private func statusPill(_ status: String) -> some View {
-        let (label, tint): (String, Color) = switch status {
-        case "approved": ("approved", Theme.verified)
-        case "per-call": ("per-call", Theme.warning)
-        case "observed": ("observed", .secondary)
-        default: (status, .secondary)
+    @ViewBuilder private func statusPill(_ status: String) -> some View {
+        switch status {
+        case "approved": StatusPill("Approved", tint: Theme.verified)
+        case "per-call": StatusPill("Per call", tint: Theme.warning)
+        case "observed": StatusPill("Observed", tint: .secondary)
+        default: StatusPill(verbatim: status, tint: .secondary)
         }
-        return StatusPill(label, tint: tint)
     }
 
     private func subtitle(_ s: SessionInfo, live: Bool) -> String {
@@ -246,9 +257,14 @@ struct SessionsView: View {
         return parts.joined(separator: " · ")
     }
 
-    private func endLine(_ s: SessionInfo) -> String {
-        let when = s.endedAt.map(TimeFormat.clock) ?? "Unknown"
-        let why = s.reason ?? "ended"
-        return "\(why) · \(when)"
+    private func endLine(_ s: SessionInfo) -> LocalizedStringResource {
+        let when = s.endedAt.map(TimeFormat.clock) ?? String(localized: "Unknown")
+        switch s.reason {
+        case "exited": return "Exited · \(when)"
+        case "revoked": return "Revoked · \(when)"
+        case "vault locked": return "Vault locked · \(when)"
+        case .some(let reason): return "\(reason) · \(when)"
+        case .none: return "Ended · \(when)"
+        }
     }
 }

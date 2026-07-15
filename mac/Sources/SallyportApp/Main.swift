@@ -18,6 +18,9 @@ enum AppMain {
         // Check after standalone CLI flags, which are meant to run alone.
         if let bid = Bundle.main.bundleIdentifier {
             let mePID = NSRunningApplication.current.processIdentifier
+            if let sourcePID = AppRelaunch.sourcePID(in: CommandLine.arguments) {
+                AppRelaunch.waitForSourceExit(pid: sourcePID)
+            }
             func liveSibling() -> NSRunningApplication? {
                 NSRunningApplication.runningApplications(withBundleIdentifier: bid)
                     .first { $0.processIdentifier != mePID && !$0.isTerminated }

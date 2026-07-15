@@ -66,12 +66,39 @@ struct ActivityTests {
     @Test("duration formatting is total at corrupt audit-log integer boundaries")
     @MainActor
     func durationFormattingBoundaries() {
-        #expect(ActivityRowView.formatDuration(Int.min) == "0ms")
-        #expect(ActivityRowView.formatDuration(-1) == "0ms")
-        #expect(ActivityRowView.formatDuration(0) == "0ms")
-        #expect(ActivityRowView.formatDuration(59_499) == "59s")
-        #expect(ActivityRowView.formatDuration(59_500) == "1m 0s")
+        let locale = Locale(identifier: "en_US")
+        #expect(ActivityRowView.formatDuration(Int.min, locale: locale) == "0ms")
+        #expect(ActivityRowView.formatDuration(-1, locale: locale) == "0ms")
+        #expect(ActivityRowView.formatDuration(0, locale: locale) == "0ms")
+        #expect(ActivityRowView.formatDuration(59_499, locale: locale) == "59s")
+        #expect(ActivityRowView.formatDuration(59_500, locale: locale) == "1m")
         #expect(!ActivityRowView.formatDuration(Int.max).isEmpty)
+    }
+
+    @Test("clock formatting follows the user's 12/24-hour preference")
+    func clockFormattingHourCycle() {
+        let timestamp = "2026-01-02T22:04:05Z"
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let twelveHour = TimeFormat.clock(
+            timestamp,
+            locale: Locale(identifier: "en_US"),
+            timeZone: utc
+        )
+        let twentyFourHour = TimeFormat.clock(
+            timestamp,
+            locale: Locale(identifier: "en_US@hours=h23"),
+            timeZone: utc
+        )
+
+        #expect(twelveHour.contains("PM"))
+        #expect(twentyFourHour == "22:04:05")
+    }
+
+    @Test("invalid timestamps remain verbatim")
+    func invalidTimestampFallback() {
+        #expect(TimeFormat.clock("not-a-timestamp") == "not-a-timestamp")
+        #expect(TimeFormat.full("not-a-timestamp") == "not-a-timestamp")
+        #expect(TimeFormat.day("not-a-timestamp") == "not-a-timestamp")
     }
 }
 

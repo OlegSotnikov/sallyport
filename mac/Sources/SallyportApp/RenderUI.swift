@@ -24,14 +24,15 @@ enum RenderUI {
 
         let model = AppModel.previewModel()
 
-        // Window size mirrors the shipped default (820×560 min 780×560).
-        let winSize = CGSize(width: 980, height: 640)
+        // Render the shipped default/minimum size so localization catches tight layouts.
+        let winSize = CGSize(width: 820, height: 560)
         let menuSize = CGSize(width: 380, height: 560)
 
         func shoot<V: View>(_ name: String, size: CGSize, dark: Bool = false,
                             settle: TimeInterval = 0.7, @ViewBuilder _ view: () -> V) {
             let root = view()
                 .frame(width: size.width, height: size.height)
+                .background(Color(nsColor: .windowBackgroundColor))
                 .preferredColorScheme(dark ? .dark : .light)
             let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: -20000, y: -20000), size: size),
                                   styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)

@@ -106,7 +106,7 @@ extension VaultState {
     /// it from a `TimelineView` tick so it visibly counts down between refreshes.
     /// Returns "∞" when auto-lock is disabled.
     func ttlClock(anchoredAt: Date, now: Date = Date()) -> String {
-        guard !locked else { return "Locked" }
+        guard !locked else { return String(localized: "Locked") }
         guard ttlSec > 0 else { return "∞" }
         return VaultTTL.clock(VaultTTL.remaining(ttlSec: ttlSec, anchoredAt: anchoredAt, now: now))
     }
@@ -165,13 +165,20 @@ extension View {
 
 /// Section label with an optional icon and trailing control.
 struct SectionHeader<Trailing: View>: View {
-    let title: String
+    let title: Text
     var systemImage: String?
     @ViewBuilder var trailing: () -> Trailing
 
-    init(_ title: String, systemImage: String? = nil,
+    init(_ title: LocalizedStringResource, systemImage: String? = nil,
          @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
-        self.title = title
+        self.title = Text(title)
+        self.systemImage = systemImage
+        self.trailing = trailing
+    }
+
+    init(verbatim title: String, systemImage: String? = nil,
+         @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
+        self.title = Text(verbatim: title)
         self.systemImage = systemImage
         self.trailing = trailing
     }
@@ -181,7 +188,7 @@ struct SectionHeader<Trailing: View>: View {
             if let systemImage {
                 Image(systemName: systemImage).font(.caption2)
             }
-            Text(title)
+            title
                 .font(.caption2.weight(.semibold))
                 .tracking(0.6)
             Spacer(minLength: Theme.Spacing.sm)
@@ -195,12 +202,12 @@ struct SectionHeader<Trailing: View>: View {
 
 /// Header with an icon, title, subtitle, and optional trailing control.
 struct ScreenHeader<Trailing: View>: View {
-    let title: String
-    let subtitle: String
+    let title: LocalizedStringResource
+    let subtitle: LocalizedStringResource
     let symbol: String
     @ViewBuilder var trailing: () -> Trailing
 
-    init(title: String, subtitle: String, symbol: String,
+    init(title: LocalizedStringResource, subtitle: LocalizedStringResource, symbol: String,
          @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
         self.title = title
         self.subtitle = subtitle
@@ -217,7 +224,7 @@ struct ScreenHeader<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(Theme.Typography.screenTitle)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Theme.Spacing.md)
             trailing()
@@ -231,15 +238,24 @@ struct ScreenHeader<Trailing: View>: View {
 
 /// Small status pill for decisions, health, versions, and badges.
 struct StatusPill: View {
-    let text: String
+    let text: Text
     var systemImage: String?
     var tint: Color
     var style: Style
 
     enum Style { case filled, tinted, mono }
 
-    init(_ text: String, systemImage: String? = nil, tint: Color = .secondary, style: Style = .tinted) {
-        self.text = text
+    init(_ text: LocalizedStringResource, systemImage: String? = nil,
+         tint: Color = .secondary, style: Style = .tinted) {
+        self.text = Text(text)
+        self.systemImage = systemImage
+        self.tint = tint
+        self.style = style
+    }
+
+    init(verbatim text: String, systemImage: String? = nil,
+         tint: Color = .secondary, style: Style = .tinted) {
+        self.text = Text(verbatim: text)
         self.systemImage = systemImage
         self.tint = tint
         self.style = style
@@ -248,7 +264,7 @@ struct StatusPill: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
             if let systemImage { Image(systemName: systemImage).font(.caption2) }
-            Text(text).font(style == .mono ? Theme.Typography.monoSmall : .caption2.weight(.semibold))
+            text.font(style == .mono ? Theme.Typography.monoSmall : .caption2.weight(.semibold))
                 .lineLimit(1)
         }
         // Never let the pill get compressed and wrap its label ("ask→approved"
@@ -275,11 +291,11 @@ struct StatusPill: View {
 
 /// A read-only row with a fixed-width key column and a value.
 struct KeyValueRow<Value: View>: View {
-    let key: String
+    let key: LocalizedStringResource
     var keyWidth: CGFloat = 116
     @ViewBuilder var value: () -> Value
 
-    init(_ key: String, keyWidth: CGFloat = 116, @ViewBuilder value: @escaping () -> Value) {
+    init(_ key: LocalizedStringResource, keyWidth: CGFloat = 116, @ViewBuilder value: @escaping () -> Value) {
         self.key = key
         self.keyWidth = keyWidth
         self.value = value
@@ -300,8 +316,8 @@ struct KeyValueRow<Value: View>: View {
 
 extension KeyValueRow where Value == Text {
     /// Plain text value.
-    init(_ key: String, _ value: String, keyWidth: CGFloat = 116) {
-        self.init(key, keyWidth: keyWidth) { Text(value) }
+    init(_ key: LocalizedStringResource, _ value: String, keyWidth: CGFloat = 116) {
+        self.init(key, keyWidth: keyWidth) { Text(verbatim: value) }
     }
 }
 
@@ -417,12 +433,12 @@ extension View {
 /// A compact, centered empty state used inside panes (the friendlier sibling of
 /// `ContentUnavailableView`, styled to match the system).
 struct EmptyStateView<Actions: View>: View {
-    let title: String
-    let message: String
+    let title: LocalizedStringResource
+    let message: LocalizedStringResource
     let symbol: String
     @ViewBuilder var actions: () -> Actions
 
-    init(title: String, message: String, symbol: String,
+    init(title: LocalizedStringResource, message: LocalizedStringResource, symbol: String,
          @ViewBuilder actions: @escaping () -> Actions = { EmptyView() }) {
         self.title = title
         self.message = message

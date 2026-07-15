@@ -29,7 +29,9 @@ final class UpstreamsViewModel {
     func save(_ upstream: Upstream, isNew: Bool) async -> Bool {
         do {
             try await mgmt.setUpstream(upstream)
-            toast = .ok(isNew ? "Added \(upstream.name)" : "Updated \(upstream.name)")
+            toast = .ok(isNew
+                ? String(localized: "Added \(upstream.name)")
+                : String(localized: "Updated \(upstream.name)"))
             await load()
             return true
         } catch {
@@ -40,7 +42,7 @@ final class UpstreamsViewModel {
     func delete(_ name: String) async {
         do {
             try await mgmt.deleteUpstream(name: name)
-            toast = .ok("Deleted \(name)")
+            toast = .ok(String(localized: "Deleted \(name)"))
             await load()
         } catch { toast = .bad(describe(error)) }
     }
@@ -49,7 +51,7 @@ final class UpstreamsViewModel {
     func connect(_ name: String) async -> Bool {
         do {
             _ = try await mgmt.authorizeUpstream(name: name)
-            toast = .ok("Signed in to \(name)")
+            toast = .ok(String(localized: "Signed in to \(name)"))
             await load()
             return true
         } catch {
@@ -62,7 +64,7 @@ final class UpstreamsViewModel {
     func disconnect(_ name: String) async {
         do {
             try await mgmt.disconnectUpstream(name: name)
-            toast = .ok("Signed out of \(name)")
+            toast = .ok(String(localized: "Signed out of \(name)"))
             await load()
         } catch { toast = .bad(describe(error)) }
     }
@@ -167,13 +169,15 @@ struct UpstreamsView: View {
                     HStack(spacing: 6) {
                         Image(systemName: u.transport == "http" ? "globe" : "terminal")
                             .font(.caption).foregroundStyle(.secondary)
-                            .help(u.transport == "http" ? "Remote (streamable HTTP)" : "Local (stdio)")
-                        Text(u.name).fontWeight(.medium).textSelection(.enabled)
-                        if !u.enabled { StatusPill("off", tint: .secondary) }
+                            .help(u.transport == "http"
+                                  ? String(localized: "Remote (streamable HTTP)")
+                                  : String(localized: "Local (stdio)"))
+                        Text(verbatim: u.name).fontWeight(.medium).textSelection(.enabled)
+                        if !u.enabled { StatusPill("Off", tint: .secondary) }
                     }
                 }
                 TableColumn("Runs") { u in
-                    Text(u.transport == "http" ? u.url : ([u.command] + u.args).joined(separator: " "))
+                    Text(verbatim: u.transport == "http" ? u.url : ([u.command] + u.args).joined(separator: " "))
                         .font(.callout.monospaced()).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 }
@@ -183,17 +187,17 @@ struct UpstreamsView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "checkmark.seal.fill")
                                     .font(.caption).foregroundStyle(Theme.verified)
-                                Text("signed in").font(.caption).foregroundStyle(.secondary)
+                                Text("Signed in").font(.caption).foregroundStyle(.secondary)
                             }
                         } else {
-                            Text("not signed in").font(.caption).foregroundStyle(Theme.warning)
+                            Text("Not signed in").font(.caption).foregroundStyle(Theme.warning)
                                 .help("Open the editor and click Connect")
                         }
                     } else if u.transport == "http" {
                         if let key = vm.boundKeyName(forURL: u.url) {
                             MonoTag(text: key, tint: Theme.accent)
                         } else {
-                            Text("unauthenticated").font(.caption).foregroundStyle(Theme.warning)
+                            Text("Unauthenticated").font(.caption).foregroundStyle(Theme.warning)
                                 .help("Bind a key to this endpoint's host in Keys and APIs")
                         }
                     } else if u.keys.isEmpty {
@@ -208,11 +212,11 @@ struct UpstreamsView: View {
                 }
                 TableColumn("Tools") { u in
                     HStack(spacing: 4) {
-                        Text("\(u.name).*").font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Text(verbatim: "\(u.name).*").font(.caption.monospaced()).foregroundStyle(.secondary)
                         if u.confirm == "touchid" {
-                            StatusPill("Touch ID / call", tint: Theme.warning)
+                            StatusPill("Touch ID per call", tint: Theme.warning)
                         } else if u.confirm == "click" {
-                            StatusPill("confirm / call", tint: Theme.warning)
+                            StatusPill("Confirm per call", tint: Theme.warning)
                         }
                     }
                 }
@@ -314,6 +318,21 @@ private struct UpstreamEditor: View {
     private var isEditing: Bool { existing != nil }
     private var isRemote: Bool { transport == "http" }
     private var isOAuth: Bool { isRemote && auth == "oauth" }
+    private var transportHint: LocalizedStringResource {
+        isRemote
+            ? LocalizedStringResource("A hosted MCP endpoint called over HTTPS.")
+            : LocalizedStringResource("A local process launched and supervised by Sallyport.")
+    }
+    private var authenticationHint: LocalizedStringResource {
+        isOAuth
+            ? LocalizedStringResource("Signs in through the browser and stores OAuth tokens in the vault. Tool-call responses are scrubbed; upstream catalog metadata is not.")
+            : LocalizedStringResource("Attaches the key bound to this endpoint's host to each request.")
+    }
+    private var localKeysHint: LocalizedStringResource {
+        secrets.isEmpty
+            ? LocalizedStringResource("Add the server's API key on Keys & APIs first, then bind it here.")
+            : LocalizedStringResource("Selected keys are passed to the local server as environment variables.")
+    }
     /// The saved row is unavailable until the server is created.
     private var saved: Upstream? { existing.flatMap { live($0.name) } ?? existing }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces).lowercased() }
@@ -326,25 +345,31 @@ private struct UpstreamEditor: View {
 
     private var nameError: String? {
         guard shows("name") else { return nil }
-        if trimmedName.isEmpty { return "Name the server. Its tools appear as name.<tool>." }
+        if trimmedName.isEmpty { return String(localized: "Name the server. Its tools appear as name.<tool>.") }
         if !isEditing, known.contains(where: { $0.name == trimmedName }) {
-            return "An MCP server named \(trimmedName) already exists."
+            return String(localized: "An MCP server named \(trimmedName) already exists.")
         }
-        if Self.reserved.contains(trimmedName) { return "\(trimmedName) is reserved for a built-in channel." }
+        if Self.reserved.contains(trimmedName) {
+            return String(localized: "\(trimmedName) is reserved for a built-in channel.")
+        }
         if !trimmedName.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) {
-            return "Use letters, digits, _ or - (no spaces or dots)."
+            return String(localized: "Use letters, digits, _ or - (no spaces or dots).")
         }
         return nil
     }
     private var commandError: String? {
         guard !isRemote, shows("command"), command.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return "Enter an executable path or a name resolved through PATH."
+        return String(localized: "Enter an executable path or a name resolved through PATH.")
     }
     private var urlValid: Bool { RemoteURLRule.isValid(trimmedURL) }
     private var urlError: String? {
         guard isRemote, shows("url") else { return nil }
-        if trimmedURL.isEmpty { return "The server's MCP endpoint, e.g. https://mcp.linear.app/mcp." }
-        if !urlValid { return "Use https:// (plain http:// is allowed only for localhost)." }
+        if trimmedURL.isEmpty {
+            return String(localized: "Enter the server’s MCP endpoint, for example https://mcp.linear.app/mcp.")
+        }
+        if !urlValid {
+            return String(localized: "Use https://. Plain http:// is allowed only for localhost.")
+        }
         return nil
     }
 
@@ -365,29 +390,34 @@ private struct UpstreamEditor: View {
         var out: [String] = []
         if trimmedName.isEmpty || Self.reserved.contains(trimmedName)
             || !trimmedName.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" })
-            || (!isEditing && known.contains { $0.name == trimmedName }) { out.append("Name") }
+            || (!isEditing && known.contains { $0.name == trimmedName }) {
+            out.append(String(localized: "Name"))
+        }
         if isRemote {
-            if !urlValid { out.append("Endpoint URL") }
+            if !urlValid { out.append(String(localized: "Endpoint URL")) }
         } else if command.trimmingCharacters(in: .whitespaces).isEmpty {
-            out.append("Command")
+            out.append(String(localized: "Command"))
         }
         return out
     }
     private var canSave: Bool { missingFields.isEmpty }
+    private var missingFieldsList: String {
+        missingFields.formatted(
+            .list(type: .and, width: .standard).locale(.autoupdatingCurrent)
+        )
+    }
 
     var body: some View {
         SheetScaffold(existing.map { "Edit MCP server \($0.name)" } ?? "Add MCP server",
                       systemImage: "puzzlepiece.extension", width: 520) {
             VStack(alignment: .leading, spacing: 12) {
-                FormRow(label: "Where",
-                        hint: isRemote
-                            ? "A hosted MCP endpoint called over HTTPS."
-                            : "A local process launched and supervised by Sallyport.") {
+                FormRow(label: "Where", hint: transportHint) {
                     Picker("Transport", selection: $transport) {
                         Text("Local (stdio)").tag("stdio")
                         Text("Remote (HTTP)").tag("http")
                     }
-                    .pickerStyle(.segmented).fixedSize()
+                    .pickerStyle(.segmented)
+                    .frame(minWidth: 250)
                     .disabled(isEditing)   // the transport is the entry's identity
                 }
                 FormRow(label: "Name",
@@ -406,15 +436,13 @@ private struct UpstreamEditor: View {
                             .invalidField(urlError != nil)
                             .onChange(of: urlString) { touched.insert("url") }
                     }
-                    FormRow(label: "Authentication",
-                            hint: isOAuth
-                                ? "Signs in through the browser and stores OAuth tokens in the vault. Tokens are not exposed to the agent."
-                                : "Attaches the key bound to this endpoint's host to each request.") {
+                    FormRow(label: "Authentication", hint: authenticationHint) {
                         Picker("Authentication", selection: $auth) {
                             Text("API key").tag("apikey")
                             Text("OAuth (sign in)").tag("oauth")
                         }
-                        .pickerStyle(.segmented).fixedSize()
+                        .pickerStyle(.segmented)
+                        .frame(minWidth: 250)
                     }
 
                     if isOAuth {
@@ -425,8 +453,11 @@ private struct UpstreamEditor: View {
                                 if let s = saved, s.oauthConnected {
                                     Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.verified)
                                     VStack(alignment: .leading, spacing: 1) {
-                                        Text("Signed in\(s.oauthAccount.isEmpty ? "" : ": \(s.oauthAccount)")")
-                                            .font(.caption)
+                                        if s.oauthAccount.isEmpty {
+                                            Text("Signed in").font(.caption)
+                                        } else {
+                                            Text("Signed in: \(s.oauthAccount)").font(.caption)
+                                        }
                                         if !s.oauthExpiry.isEmpty {
                                             Text("Token renews automatically")
                                                 .font(.caption2).foregroundStyle(.tertiary)
@@ -442,9 +473,15 @@ private struct UpstreamEditor: View {
                                     Text("Not signed in. The server's tools remain hidden until you connect.")
                                         .font(.caption).foregroundStyle(.secondary)
                                     Spacer()
-                                    Button(isConnecting ? "Waiting for browser…" : "Connect…") {
+                                    Button {
                                         isConnecting = true
                                         Task { _ = await connect(s.name); isConnecting = false }
+                                    } label: {
+                                        if isConnecting {
+                                            Text("Waiting for browser…")
+                                        } else {
+                                            Text("Connect…")
+                                        }
                                     }
                                     .buttonStyle(.borderedProminent).controlSize(.small)
                                     .disabled(isConnecting || !urlValid)
@@ -487,15 +524,12 @@ private struct UpstreamEditor: View {
                         TextField("-y @modelcontextprotocol/server-github", text: $argsLine)
                             .textFieldStyle(.roundedBorder).font(.callout.monospaced())
                     }
-                    FormRow(label: "Keys",
-                            hint: secrets.isEmpty
-                                ? "Add the server's API key on Keys & APIs first, then bind it here."
-                                : "Selected keys are passed to the server as environment variables at launch.") {
+                    FormRow(label: "Keys", hint: localKeysHint) {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(keys.indices, id: \.self) { i in
                                 HStack(spacing: 8) {
                                     Picker("Secret", selection: $keys[i].secret) {
-                                        ForEach(secrets) { Text($0.name).tag($0.name) }
+                                        ForEach(secrets) { Text(verbatim: $0.name).tag($0.name) }
                                     }
                                     .labelsHidden().frame(width: 160)
                                     Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
@@ -513,7 +547,7 @@ private struct UpstreamEditor: View {
 
                             if !keys.isEmpty {
                                 Label {
-                                    Text("Local MCP servers receive selected keys as environment variables. Other processes running as your user may be able to read them, and a replaced executable would receive them. Use a remote HTTP server for sensitive keys when possible.")
+                                    Text("Local MCP servers receive bound credentials and inherit Sallyport’s process environment. Non-per-call servers start during vault unlock and may keep those values until lock, reconfiguration, or exit. Treat the server and its dependencies as trusted code.")
                                         .font(.caption).foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 } icon: {
@@ -532,13 +566,14 @@ private struct UpstreamEditor: View {
                 }
 
                 FormRow(label: "Approval per call",
-                        hint: "Require approval for each tool call. Off adds no per-call prompt.") {
+                        hint: "Require approval for each tool invocation. Initialization and tool discovery do not show a per-call prompt.") {
                     Picker("Approval per call", selection: $confirm) {
                         Text("Off").tag("")
                         Text("One click").tag("click")
                         Text("Touch ID").tag("touchid")
                     }
-                    .pickerStyle(.segmented).fixedSize()
+                    .pickerStyle(.segmented)
+                    .frame(minWidth: 250)
                 }
                 FormRow(label: "Enabled", hint: "Off keeps the config but exposes no tools.") {
                     Toggle("Enabled", isOn: $enabled).labelsHidden().toggleStyle(AccentSwitchStyle())
@@ -547,7 +582,7 @@ private struct UpstreamEditor: View {
         } footer: {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 if didAttemptSave, !missingFields.isEmpty {
-                    Label("Still needed: \(missingFields.joined(separator: ", "))",
+                    Label("Still needed: \(missingFieldsList)",
                           systemImage: "exclamationmark.circle.fill")
                         .font(.caption).foregroundStyle(Theme.danger)
                 }

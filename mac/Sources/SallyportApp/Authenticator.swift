@@ -10,7 +10,7 @@ enum AuthOutcome: Sendable, Equatable {
 /// Biometric authentication isolated to the main actor for `LAContext` safety.
 @MainActor
 protocol Authenticator: AnyObject {
-    /// Prompts with the supplied reason.
+    /// Prompts with an already-localized reason supplied by the caller.
     func authenticate(reason: String) async -> AuthOutcome
     /// Successful context available to the next Secure Enclave operation.
     var lastAuthenticatedContext: LAContext? { get }
@@ -57,7 +57,7 @@ final class DevAuthenticator: Authenticator {
 
     func authenticate(reason: String) async -> AuthOutcome {
         // Match the asynchronous transition used by the biometric authenticator.
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        try? await Task.sleep(for: .milliseconds(250))
         return .approved
     }
 }

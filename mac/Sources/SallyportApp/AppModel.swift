@@ -21,20 +21,20 @@ enum MainTab: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
-        case .approvals: return "Approvals"
-        case .activity: return "Activity"
-        case .sessions: return "Sessions"
-        case .keys: return "Keys and APIs"
-        case .hosts: return "SSH hosts"
-        case .mcp: return "MCP servers"
-        case .agents: return "Agent allowlist"
-        case .integrations: return "Integrations"
-        case .vault: return "Vault and keys"
-        case .settings: return "Settings"
-        case .setup: return "Setup"
-        case .about: return "About"
+        case .approvals: return LocalizedStringResource("Approvals")
+        case .activity: return LocalizedStringResource("Activity")
+        case .sessions: return LocalizedStringResource("Sessions")
+        case .keys: return LocalizedStringResource("Keys and APIs")
+        case .hosts: return LocalizedStringResource("SSH hosts")
+        case .mcp: return LocalizedStringResource("MCP servers")
+        case .agents: return LocalizedStringResource("Agent allowlist")
+        case .integrations: return LocalizedStringResource("Integrations")
+        case .vault: return LocalizedStringResource("Vault and keys")
+        case .settings: return LocalizedStringResource("Settings")
+        case .setup: return LocalizedStringResource("Setup")
+        case .about: return LocalizedStringResource("About")
         }
     }
     var symbol: String {
@@ -56,10 +56,17 @@ enum MainTab: String, CaseIterable, Identifiable {
 
     /// Sidebar groups.
     enum Section: String, CaseIterable, Identifiable {
-        case monitor = "Monitor"
-        case configure = "Configure"
-        case system = "System"
+        case monitor
+        case configure
+        case system
         var id: String { rawValue }
+        var title: LocalizedStringResource {
+            switch self {
+            case .monitor: LocalizedStringResource("Monitor")
+            case .configure: LocalizedStringResource("Configure")
+            case .system: LocalizedStringResource("System")
+            }
+        }
         var tabs: [MainTab] {
             switch self {
             case .monitor: return [.approvals, .activity, .sessions]
@@ -158,6 +165,13 @@ final class AppModel: Approver, CredentialPrompter {
     var socketPath: String { runtime.socketPath }
     /// True when this vault uses the Secure Enclave backend.
     var isHardwareGated: Bool { runtime.isGated }
+    /// Localized backend name shown in app chrome and vault status.
+    var backendDisplayName: LocalizedStringResource {
+        switch backend {
+        case .secureEnclave: LocalizedStringResource("Secure Enclave")
+        case .software: LocalizedStringResource("Software (development)")
+        }
+    }
 
     init(signer: (any KeyCustodian)? = nil,
          authenticator: (any Authenticator)? = nil,
@@ -215,8 +229,8 @@ final class AppModel: Approver, CredentialPrompter {
         guard !isDemo, runtime.isGated, let gate = identityGate, gate.isSealed else { return }
         guard let se = signer as? SecureEnclaveKeyCustodian else { return }
         guard !se.reused else { return }
-        vaultUnlockError = "The Secure Enclave key for this vault is missing. "
-            + "The vault cannot be recovered. Create a new vault and reissue its credentials."
+        vaultUnlockError = String(localized:
+            "The Secure Enclave key for this vault is missing. The vault cannot be recovered. Create a new vault and reissue its credentials.")
         Log.line("ERROR: the Secure Enclave wrapping key changed; the sealed identity cannot be opened")
     }
 
@@ -339,7 +353,7 @@ final class AppModel: Approver, CredentialPrompter {
             ts: e.ts.isEmpty ? Self.timestamp() : e.ts,
             identity: e.origin?.app.nonEmpty ?? e.origin?.name.nonEmpty ?? e.identity,
             channel: e.channel, tool: e.tool, argsPreview: e.argsPreview,
-            target: e.target.isEmpty ? "None" : e.target, decision: e.decision,
+            target: e.target.isEmpty ? String(localized: "None") : e.target, decision: e.decision,
             rule: e.rule.isEmpty ? nil : e.rule, isError: e.isError,
             bytesOut: e.bytesOut == 0 ? nil : e.bytesOut,
             durationMs: e.durationMs == 0 ? nil : Int(e.durationMs),
@@ -353,7 +367,7 @@ final class AppModel: Approver, CredentialPrompter {
         record(ActivityRow(
             ts: Self.timestamp(), identity: s.app.nonEmpty ?? s.name,
             channel: "session", tool: "session.end", argsPreview: "pid \(s.pid)",
-            target: "None", decision: "session \(s.reason?.rawValue ?? "ended")",
+            target: String(localized: "None"), decision: "session \(s.reason?.rawValue ?? "ended")",
             rule: "session", isError: false))
     }
 
@@ -418,11 +432,13 @@ final class AppModel: Approver, CredentialPrompter {
     /// Rekeys an unlocked vault to a Secure Enclave-protected identity.
     func enableHardwareGate() async throws {
         guard let identityGate else {
-            throw SetupError.gateEnable("no Secure-Enclave store for the sealed identity on this Mac")
+            throw SetupError.gateEnable(String(localized:
+                "No Secure Enclave store is available for the sealed identity on this Mac."))
         }
         if vault.locked {
             guard await unlockForEditing() else {
-                throw SetupError.gateEnable("the vault must be unlocked to enable the hardware gate")
+                throw SetupError.gateEnable(String(localized:
+                    "Unlock the vault before enabling the hardware gate."))
             }
         }
         try await runtime.enableHardwareGate(signer: signer, gate: identityGate)
@@ -619,7 +635,7 @@ final class AppModel: Approver, CredentialPrompter {
     func approve(_ request: ApprovalRequest) async {
         let strict = ApprovalRequest.biometricModes.contains(request.mode)
         if strict {
-            let outcome = await authenticator.authenticate(reason: request.touchIDReason)
+            let outcome = await authenticator.authenticate(reason: ApprovalCopy.touchIDReason(for: request))
             guard outcome == .approved else { return }   // keep the card pending
         }
         resolve(request.id, .approved)
@@ -644,7 +660,7 @@ final class AppModel: Approver, CredentialPrompter {
                 identity: request.provenance.origin.appName ?? request.provenance.origin.name,
                 channel: request.action.channel, tool: request.action.tool,
                 argsPreview: ApprovalPresentation.primaryActionText(request.action),
-                target: request.action.host ?? "None", decision: decision,
+                target: request.action.host ?? String(localized: "None"), decision: decision,
                 rule: request.why.rule, isError: true))
         }
     }
@@ -653,7 +669,9 @@ final class AppModel: Approver, CredentialPrompter {
     /// provenance to the Kit's).
     private static func approvalRequest(from req: EngineApproval) -> ApprovalRequest {
         let o = req.origin
-        let label = o.name.isEmpty ? (o.path.split(separator: "/").last.map(String.init) ?? "process") : o.name
+        let label = o.name.isEmpty
+            ? (o.path.split(separator: "/").last.map(String.init) ?? String(localized: "process"))
+            : o.name
         let originHop = ProcessHop(
             pid: o.pid, name: label,
             path: o.path.isEmpty ? nil : o.path, ppid: nil,
@@ -838,14 +856,16 @@ final class AppModel: Approver, CredentialPrompter {
         guard !isDemo else { setVault(VaultState(locked: false, ttlSec: 21_600)); return }
 
         // Unlocking stored credentials requires user presence.
-        let outcome = await authenticator.authenticate(reason: "Unlock the Sallyport vault")
+        let outcome = await authenticator.authenticate(
+            reason: String(localized: "Unlock the Sallyport vault"))
         guard outcome == .approved else { return }
 
         // Open the sealed vault identity after Touch ID.
         var identity = ""
         if runtime.isGated {
             guard let gate = identityGate, gate.isSealed else {
-                let msg = "The key required to unlock this vault is missing from this Mac. Recreate the vault."
+                let msg = String(localized:
+                    "The key required to unlock this vault is missing from this Mac. Recreate the vault.")
                 Log.line("ERROR: gated unlock aborted: \(msg)")
                 vaultUnlockError = msg
                 return
@@ -858,12 +878,14 @@ final class AppModel: Approver, CredentialPrompter {
             do {
                 identity = try gate.unseal(using: effectiveSigner)
             } catch {
-                vaultUnlockError = "Could not unseal the vault identity: \(error.localizedDescription)"
+                vaultUnlockError = String(localized:
+                    "Could not unseal the vault identity: \(error.localizedDescription)",
+                    comment: "Vault unlock error followed by a system error description.")
                 Log.line("ERROR: gated unlock failed: \(error)")
                 return
             }
             guard !identity.isEmpty else {
-                vaultUnlockError = "The stored vault identity is empty."
+                vaultUnlockError = String(localized: "The stored vault identity is empty.")
                 return
             }
         }
@@ -871,7 +893,9 @@ final class AppModel: Approver, CredentialPrompter {
         do {
             try await runtime.unlock(identity: identity)
         } catch {
-            vaultUnlockError = "Could not unlock the vault: \(error.localizedDescription)"
+            vaultUnlockError = String(localized:
+                "Could not unlock the vault: \(error.localizedDescription)",
+                comment: "Vault unlock error followed by a system error description.")
             Log.line("ERROR: vault unlock failed: \(error)")
             return
         }
@@ -886,24 +910,34 @@ final class AppModel: Approver, CredentialPrompter {
     func readoptIntegrity() async {
         guard !isDemo else { integrityIssues = []; return }
         let outcome = await authenticator.authenticate(
-            reason: "Accept the current vault and audit state")
+            reason: String(localized: "Accept the current vault and audit state"))
         guard outcome == .approved else { return }
         await runtime.readoptIntegrity()
         integrityIssues = []
     }
 
-    /// Phrase required to confirm a reset.
-    static let resetConfirmationPhrase = "ERASE MY KEYS"
+    /// Phrase required to confirm a reset in the active app language.
+    static var resetConfirmationPhrase: String {
+        String(localized: "ERASE MY KEYS",
+               comment: "Destructive confirmation phrase the user must type before erasing the vault.")
+    }
+
+    /// Compares the typed phrase without assuming the active language has letter case.
+    static func resetConfirmationMatches(_ confirmation: String, phrase: String = resetConfirmationPhrase) -> Bool {
+        confirmation.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare(phrase) == .orderedSame
+    }
 
     /// Permanently erases the vault after validating the reset phrase and Touch ID.
     func resetVault(confirmation: String) async throws {
-        guard confirmation.trimmingCharacters(in: .whitespaces).uppercased()
-                == Self.resetConfirmationPhrase else {
-            throw SetupError.gateEnable("The confirmation phrase did not match. Sallyport did not erase any data.")
+        guard Self.resetConfirmationMatches(confirmation) else {
+            throw SetupError.reset(String(localized:
+                "The confirmation phrase did not match. Sallyport did not erase any data."))
         }
         // Require Touch ID in addition to the typed phrase.
-        guard await confirmConfigChange("Erase all Sallyport data and start over") else {
-            throw SetupError.gateEnable("Touch ID did not confirm the reset. Sallyport did not erase any data.")
+        guard await confirmConfigChange(String(localized: "Erase all Sallyport data and start over")) else {
+            throw SetupError.reset(String(localized:
+                "Touch ID did not confirm the reset. Sallyport did not erase any data."))
         }
         Log.line("resetVault confirmed; erasing all Sallyport data")
         try await runtime.resetVault(signer: signer, gate: identityGate)

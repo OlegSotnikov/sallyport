@@ -42,7 +42,9 @@ final class KeysViewModel {
                     try await mgmt.rotateSecret(name: input.name, value: input.value)
                 }
             }
-            toast = .ok(isNew ? "Added \(input.name)" : "Updated \(input.name)")
+            toast = .ok(isNew
+                ? String(localized: "Added \(input.name)")
+                : String(localized: "Updated \(input.name)"))
             await load()
             return .saved
         } catch let error as MgmtError where error.isPassphraseRequired {
@@ -55,7 +57,7 @@ final class KeysViewModel {
     func rotate(name: String, value: String) async -> Bool {
         do {
             try await mgmt.rotateSecret(name: name, value: value)
-            toast = .ok("Rotated \(name)")
+            toast = .ok(String(localized: "Rotated \(name)"))
             await load()
             return true
         } catch {
@@ -67,7 +69,7 @@ final class KeysViewModel {
     func delete(_ name: String) async {
         do {
             try await mgmt.deleteSecret(name: name)
-            toast = .ok("Deleted \(name)")
+            toast = .ok(String(localized: "Deleted \(name)"))
             await load()
         } catch {
             toast = .bad(describe(error))
@@ -161,10 +163,16 @@ struct KeysAPIsView: View {
                     HStack(spacing: 8) {
                         Image(systemName: secret.kind == "ssh-ed25519" ? "terminal.fill" : "network")
                             .foregroundStyle(.secondary)
-                        Text(secret.name).fontWeight(.medium).textSelection(.enabled)
+                        Text(verbatim: secret.name).fontWeight(.medium).textSelection(.enabled)
                     }
                 }
-                TableColumn("Kind") { secret in Text(secret.kindLabel).foregroundStyle(.secondary) }
+                TableColumn("Kind") { secret in
+                    if let kind = SecretKind(rawValue: secret.kind) {
+                        Text(kind.localizedLabel).foregroundStyle(.secondary)
+                    } else {
+                        Text(verbatim: secret.kind).foregroundStyle(.secondary)
+                    }
+                }
                 TableColumn("Per call") { secret in
                     switch secret.confirm {
                     case "click":
@@ -184,11 +192,15 @@ struct KeysAPIsView: View {
                     if secret.bind.isEmpty {
                         Text("Not set").foregroundStyle(.tertiary)
                     } else {
-                        Text(secret.bind.joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1)
+                        Text(verbatim: secret.bind.joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 TableColumn("Rotated") { secret in
-                    Text(secret.rotatedAt.map(TimeFormat.day) ?? "Not available").foregroundStyle(.secondary)
+                    if let rotatedAt = secret.rotatedAt {
+                        Text(verbatim: TimeFormat.day(rotatedAt)).foregroundStyle(.secondary)
+                    } else {
+                        Text("Not available").foregroundStyle(.secondary)
+                    }
                 }
                 TableColumn("") { secret in
                     Menu {
@@ -238,13 +250,13 @@ struct SecretEditor: View {
         var errorDescription: String? {
             switch self {
             case .tooLarge:
-                return "The key file exceeds the 1 MiB import limit."
+                return String(localized: "The key file exceeds the 1 MiB import limit.")
             case .unsafeFile:
-                return "The key must be a direct, single-link regular file."
+                return String(localized: "The key must be a direct, single-link regular file.")
             case .unreadable:
-                return "The key file changed while it was being read or failed validation."
+                return String(localized: "The key file changed while it was being read or failed validation.")
             case .invalidUTF8:
-                return "The key file is not valid UTF-8 text."
+                return String(localized: "The key file is not valid UTF-8 text.")
             }
         }
     }
@@ -277,7 +289,7 @@ struct SecretEditor: View {
     /// Error shown beside the form fields.
     @State private var formError: String?
     /// Hint shown after an encrypted SSH key requires a passphrase.
-    @State private var passphraseHint: String?
+    @State private var passphraseHint: LocalizedStringResource?
     @FocusState private var passphraseFocused: Bool
     /// Tracks fields eligible to show validation errors.
     @State private var touched: Set<String> = []
@@ -311,6 +323,11 @@ struct SecretEditor: View {
 
     private var isEditing: Bool { existing != nil }
     private var isSSH: Bool { kind == .sshEd25519 }
+    private var valueHint: LocalizedStringResource {
+        isEditing
+            ? LocalizedStringResource("Leave blank to keep the current value; type to replace it.")
+            : LocalizedStringResource("Stored encrypted and not shown again.")
+    }
 
     /// Derives service-neutral placeholders from the first host binding.
     private var bindPlaceholder: String { bind.first ?? "api.example.com" }
@@ -332,49 +349,60 @@ struct SecretEditor: View {
 
     private var nameError: String? {
         guard shows("name") else { return nil }
-        if trimmedName.isEmpty { return "Give the key a name." }
-        if nameCollision { return "A key named \(trimmedName) already exists." }
-        if trimmedName.contains(" ") { return "Use letters, digits, _ or - (no spaces)." }
+        if trimmedName.isEmpty { return String(localized: "Give the key a name.") }
+        if nameCollision { return String(localized: "A key named \(trimmedName) already exists.") }
+        if trimmedName.contains(" ") { return String(localized: "Use letters, digits, _ or - (no spaces).") }
         return nil
     }
     private var valueError: String? {
         guard shows("value"), !isEditing, value.isEmpty else { return nil }
-        return isSSH ? "Paste the private key, or import it from a file."
-                     : "Paste the secret value."
+        return isSSH
+            ? String(localized: "Paste the private key, or import it from a file.")
+            : String(localized: "Paste the secret value.")
     }
     private var headerError: String? {
         guard shows("header"), kind.needsHeaderName,
               header.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return "Name the header this key is sent in (e.g. X-Api-Key)."
+        return String(localized: "Name the header this key is sent in (for example, X-Api-Key).")
     }
     private func paramError(_ field: ParamField) -> String? {
-        // Labels containing "optional" are not required.
-        guard shows("param." + field.key), !field.label.lowercased().contains("optional"),
+        guard shows("param." + field.key), paramRequired(field),
               (params[field.key] ?? "").trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return "\(field.label) is required for \(kind.label)."
+        let label = String(localized: field.localizedLabel)
+        let kindLabel = String(localized: kind.localizedLabel)
+        return String(localized: "\(label) is required for \(kindLabel).")
     }
     private func paramRequired(_ field: ParamField) -> Bool {
-        !field.label.lowercased().contains("optional")
+        field.key != "scope"
     }
     /// Warns when an HTTP key has no permitted destination.
     private var bindWarning: String? {
         guard kind.isHTTPCredential, bind.isEmpty else { return nil }
-        return "This key has no host binding and will not be sent. Add the API host."
+        return String(localized: "This key has no host binding and will not be sent. Add the API host.")
     }
 
     /// Required fields that still block saving.
     private var missingFields: [String] {
         var out: [String] = []
-        if trimmedName.isEmpty || nameCollision || trimmedName.contains(" ") { out.append("Name") }
-        if !isEditing && value.isEmpty { out.append("Value") }
-        if kind.needsHeaderName && header.trimmingCharacters(in: .whitespaces).isEmpty { out.append("Header") }
+        if trimmedName.isEmpty || nameCollision || trimmedName.contains(" ") {
+            out.append(String(localized: "Name"))
+        }
+        if !isEditing && value.isEmpty { out.append(String(localized: "Value")) }
+        if kind.needsHeaderName && header.trimmingCharacters(in: .whitespaces).isEmpty {
+            out.append(String(localized: "Header"))
+        }
         for f in kind.paramFields where paramRequired(f)
             && (params[f.key] ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
-            out.append(f.label)
+            out.append(String(localized: f.localizedLabel))
         }
         return out
     }
     private var canSave: Bool { missingFields.isEmpty }
+    private var missingFieldsList: String {
+        missingFields.formatted(
+            .list(type: .and, width: .standard).locale(.autoupdatingCurrent)
+        )
+    }
 
     var body: some View {
         SheetScaffold(existing.map { "Edit key \($0.name)" } ?? "Add key",
@@ -388,10 +416,20 @@ struct SecretEditor: View {
                             hint: "Optional. Fills the binding and adapter for a known service.") {
                         Menu {
                             ForEach(ServicePresets.all) { preset in
-                                Button(preset.label) { applyPreset(preset) }
+                                Button { applyPreset(preset) } label: {
+                                    Text(verbatim: preset.label)
+                                }
                             }
                         } label: {
-                            Label(pickedPreset?.label ?? "Choose a service…", systemImage: "sparkles")
+                            if let pickedPreset {
+                                Label {
+                                    Text(verbatim: pickedPreset.label)
+                                } icon: {
+                                    Image(systemName: "sparkles")
+                                }
+                            } else {
+                                Label("Choose a service…", systemImage: "sparkles")
+                            }
                         }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
@@ -412,7 +450,7 @@ struct SecretEditor: View {
                 }
                 FormRow(label: "Kind") {
                     Picker("Kind", selection: $kind) {
-                        ForEach(SecretKind.allCases) { Text($0.label).tag($0) }
+                        ForEach(SecretKind.allCases) { Text($0.localizedLabel).tag($0) }
                     }
                     .labelsHidden()
                     .fixedSize()
@@ -425,11 +463,16 @@ struct SecretEditor: View {
                     }
                 }
                 FormRow(label: isEditing ? "New value" : "Value",
-                        hint: isEditing ? "Leave blank to keep the current value; type to replace it." : "\(kind.valueLabel). Stored encrypted and not shown again.",
+                        hint: valueHint,
                         isRequired: !isEditing, error: valueError) {
                     // The stored value is never loaded back into the field.
                     HStack(spacing: Theme.Spacing.sm) {
-                        SecureField(isSSH ? "paste private key (PEM/OpenSSH)" : kind.valueLabel, text: $value)
+                        SecureField(
+                            isSSH
+                                ? String(localized: "paste private key (PEM/OpenSSH)")
+                                : String(localized: kind.localizedValueLabel),
+                            text: $value
+                        )
                             .textFieldStyle(.roundedBorder)
                             .invalidField(valueError != nil)
                             .onChange(of: value) { touched.insert("value") }
@@ -444,7 +487,7 @@ struct SecretEditor: View {
                 // The passphrase decrypts an imported SSH key and is not stored.
                 if isSSH {
                     FormRow(label: "Passphrase",
-                            hint: passphraseHint ?? "Optional. Used once to decrypt a password-protected key and not stored.") {
+                            hint: passphraseHint ?? LocalizedStringResource("Optional. Used once to decrypt a password-protected key and not stored.")) {
                         SecureField("key passphrase (optional)", text: $passphrase)
                             .textFieldStyle(.roundedBorder)
                             .focused($passphraseFocused)
@@ -474,7 +517,7 @@ struct SecretEditor: View {
                     }
                     // Adapter parameters are stored as metadata.
                     ForEach(kind.paramFields) { field in
-                        FormRow(label: field.label,
+                        FormRow(label: field.localizedLabel,
                                 isRequired: paramRequired(field), error: paramError(field)) {
                             TextField(field.placeholder, text: Binding(
                                 get: { params[field.key] ?? "" },
@@ -510,7 +553,11 @@ struct SecretEditor: View {
                 }
 
                 if let formError {
-                    Label(formError, systemImage: "exclamationmark.triangle.fill")
+                    Label {
+                        Text(verbatim: formError)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
                         .font(.caption).foregroundStyle(Theme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -518,7 +565,7 @@ struct SecretEditor: View {
         } footer: {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 if didAttemptSave, !missingFields.isEmpty {
-                    Label("Still needed: \(missingFields.joined(separator: ", "))",
+                    Label("Still needed: \(missingFieldsList)",
                           systemImage: "exclamationmark.circle.fill")
                         .font(.caption).foregroundStyle(Theme.danger)
                 }
@@ -535,7 +582,7 @@ struct SecretEditor: View {
     }
 
     /// Includes the unlock step in the add-button label when required.
-    private var saveTitle: String {
+    private var saveTitle: LocalizedStringResource {
         if isEditing { return "Save" }
         return vaultLocked ? "Unlock & Add" : "Add"
     }
@@ -570,7 +617,7 @@ struct SecretEditor: View {
             let opened = await unlockVault()
             isUnlocking = false
             guard opened else {
-                formError = "The vault is still locked. The key was not added."
+                formError = String(localized: "The vault is still locked. The key was not added.")
                 return
             }
             if saveAfter { performSave() }
@@ -592,8 +639,8 @@ struct SecretEditor: View {
 
     private func importFromFile() {
         let panel = NSOpenPanel()
-        panel.title = "Import SSH private key"
-        panel.prompt = "Import"
+        panel.title = String(localized: "Import SSH private key")
+        panel.prompt = String(localized: "Import")
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
@@ -603,7 +650,7 @@ struct SecretEditor: View {
             value = try Self.readImportedKey(at: url)
             formError = nil
         } catch {
-            formError = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
+            formError = String(localized: "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)")
         }
     }
 
@@ -667,6 +714,44 @@ struct SecretEditor: View {
             case .failed(let message):
                 formError = message
             }
+        }
+    }
+}
+
+// MARK: - App presentation for locale-neutral protocol models
+
+private extension SecretKind {
+    var localizedLabel: LocalizedStringResource {
+        switch self {
+        case .bearer: "Bearer token"
+        case .basic: "Basic authentication"
+        case .header: "Custom header"
+        case .awsSigV4: "AWS Signature Version 4"
+        case .oauth2: "OAuth 2.0 (client credentials)"
+        case .sshEd25519: "SSH key (Ed25519)"
+        }
+    }
+
+    var localizedValueLabel: LocalizedStringResource {
+        switch self {
+        case .basic: "Username and password"
+        case .awsSigV4: "Access key ID and secret access key"
+        case .oauth2: "Client secret"
+        case .sshEd25519: "Private key (PEM)"
+        default: "Secret value"
+        }
+    }
+}
+
+private extension ParamField {
+    var localizedLabel: LocalizedStringResource {
+        switch key {
+        case "region": "Region"
+        case "service": "Service"
+        case "tokenUrl": "Token URL"
+        case "clientId": "Client ID"
+        case "scope": "Scope (optional)"
+        default: LocalizedStringResource(stringLiteral: label)
         }
     }
 }
@@ -814,14 +899,14 @@ struct CredentialRequestSheet: View {
             Label("\(originName) requested a key", systemImage: "key.fill")
                 .font(.headline)
             if !request.purpose.isEmpty {
-                Text(request.purpose).font(.callout).foregroundStyle(.secondary)
+                Text(verbatim: request.purpose).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             // The requested hosts seed the editable binding field.
             VStack(alignment: .leading, spacing: 3) {
                 Label("Will be used only for", systemImage: "shield.lefthalf.filled")
                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text(request.hosts.joined(separator: "  ·  "))
+                Text(verbatim: request.hosts.joined(separator: "  ·  "))
                     .font(.callout.monospaced()).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }

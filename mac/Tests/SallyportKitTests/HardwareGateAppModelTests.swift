@@ -133,10 +133,14 @@ struct VaultResetTests {
         #expect(!FileManager.default.fileExists(atPath: model.setup.paths.sallyportHome + "/audit"))
     }
 
-    @Test("the phrase is case-insensitive but must be the whole phrase")
+    @Test("phrase matching handles cased and uncased scripts")
     func phraseNormalization() async throws {
         let (model, root) = makeModel()
         defer { try? FileManager.default.removeItem(at: root) }
+        #expect(AppModel.resetConfirmationMatches(" erase my keys ", phrase: "ERASE MY KEYS"))
+        #expect(AppModel.resetConfirmationMatches(" 删除我的密钥 ", phrase: "删除我的密钥"))
+        #expect(!AppModel.resetConfirmationMatches("删除我的密钥。", phrase: "删除我的密钥"))
+
         // No vault at all: the phrase check still runs first and rejects.
         await #expect(throws: (any Error).self) {
             try await model.resetVault(confirmation: "erase my keyz")

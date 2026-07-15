@@ -311,14 +311,15 @@ final class VaultRuntime {
         case lifecycleSuperseded
         var errorDescription: String? {
             switch self {
-            case .noVault: return "No vault is open."
-            case .noApprover: return "Approval handling is unavailable."
-            case .sealedNoIdentity: return "The hardware-gated vault has no identity."
-            case .vaultExists: return "A readable vault already exists."
-            case .mustBeUnlocked: return "Unlock the vault first."
-            case .lifecycleSuperseded: return "The vault was locked or unlocked again before this operation finished."
+            case .noVault: return String(localized: "No vault is open.")
+            case .noApprover: return String(localized: "Approval handling is unavailable.")
+            case .sealedNoIdentity: return String(localized: "The hardware-gated vault has no identity.")
+            case .vaultExists: return String(localized: "A readable vault already exists.")
+            case .mustBeUnlocked: return String(localized: "Unlock the vault first.")
+            case .lifecycleSuperseded:
+                return String(localized: "The vault was locked or unlocked again before this operation finished.")
             case .noSecureEnclave:
-                return "Sallyport hardware protection requires Apple Silicon and the signed app."
+                return String(localized: "Sallyport hardware protection requires Apple Silicon and the signed app.")
             }
         }
     }

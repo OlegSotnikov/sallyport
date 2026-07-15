@@ -23,7 +23,7 @@ struct ApprovalRow: View {
     private var isPerCall: Bool { request.mode.hasPrefix("per-call") }
     private var needsTouchID: Bool { ApprovalRequest.biometricModes.contains(request.mode) }
     private var origin: String { request.provenance.origin.appName ?? request.provenance.origin.name }
-    private var summary: String { ApprovalPresentation.primaryActionText(request.action) }
+    private var summary: String { ApprovalCopy.actionText(request.action) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -50,13 +50,13 @@ struct ApprovalRow: View {
             icon.frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(origin).font(.callout.weight(.semibold)).lineLimit(1)
+                    Text(verbatim: origin).font(.callout.weight(.semibold)).lineLimit(1)
                     if !isIntact {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.caption2).foregroundStyle(Theme.danger)
                     }
                 }
-                Text(summary)
+                Text(verbatim: summary)
                     .font(Theme.Typography.monoSmall)
                     .foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -75,7 +75,9 @@ struct ApprovalRow: View {
         .contentShape(Rectangle())
         .onTapGesture { withAnimation(.snappy(duration: 0.18)) { expanded.toggle() } }
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint(expanded ? "Collapse details" : "Expand details")
+        .accessibilityHint(expanded
+                           ? String(localized: "Collapse details")
+                           : String(localized: "Expand details"))
     }
 
     @ViewBuilder private var icon: some View {
@@ -99,8 +101,11 @@ struct ApprovalRow: View {
                 if isProcessing {
                     ProgressView().controlSize(.small)
                 } else if needsTouchID {
-                    Label(isSession ? "Approve agent" : "Approve call", systemImage: "touchid")
-                        .labelStyle(.titleAndIcon)
+                    if isSession {
+                        Label("Approve agent", systemImage: "touchid").labelStyle(.titleAndIcon)
+                    } else {
+                        Label("Approve call", systemImage: "touchid").labelStyle(.titleAndIcon)
+                    }
                 } else if isPerCall {
                     Label("Approve call", systemImage: "1.circle").labelStyle(.titleAndIcon)
                 } else if isSession {
@@ -124,7 +129,7 @@ struct ApprovalRow: View {
             commandBlock
             if let body = request.action.bodyPreview,
                request.action.channel != "ssh", !body.isEmpty {
-                Text(body).font(Theme.Typography.monoSmall)
+                Text(verbatim: body).font(Theme.Typography.monoSmall)
                     .foregroundStyle(.secondary).lineLimit(4)
             }
             if isSession { sessionNote }
@@ -137,7 +142,7 @@ struct ApprovalRow: View {
 
     private var commandBlock: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-            Text(request.action.channel == "ssh" ? "$" : "▸")
+            Text(verbatim: request.action.channel == "ssh" ? "$" : "▸")
                 .font(Theme.mono).foregroundStyle(.tertiary)
             Text(highlightedCommand).font(Theme.mono).textSelection(.enabled)
         }
@@ -156,9 +161,16 @@ struct ApprovalRow: View {
         return HStack(spacing: Theme.Spacing.xs + 2) {
             Image(systemName: signed ? "checkmark.seal.fill" : "exclamationmark.shield.fill")
                 .foregroundStyle(tint)
-            Text(authority.isEmpty ? (signed ? "Signed" : "Unsigned executable") : authority)
-                .font(.caption.weight(.medium)).foregroundStyle(signed ? .primary : tint)
-                .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+            if !authority.isEmpty {
+                Text(verbatim: authority)
+                    .font(.caption.weight(.medium)).foregroundStyle(signed ? .primary : tint)
+                    .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+            } else if signed {
+                Text("Signed").font(.caption.weight(.medium))
+            } else {
+                Text("Unsigned executable")
+                    .font(.caption.weight(.medium)).foregroundStyle(tint)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Spacing.sm).padding(.vertical, Theme.Spacing.xs)
@@ -179,10 +191,11 @@ struct ApprovalRow: View {
     }
 
     private var whyLine: some View {
-        (Text("Why: ").fontWeight(.medium)
-         + Text("rule ").foregroundStyle(.secondary)
-         + Text("\(request.why.rule)").font(.caption.monospaced())
-         + Text(" · \(request.why.reason)").foregroundStyle(.secondary))
+        let reason = ApprovalCopy.reason(request.why.reason)
+        return (Text("Why: ").fontWeight(.medium)
+                + Text("Rule ").foregroundStyle(.secondary)
+                + Text(verbatim: request.why.rule).font(.caption.monospaced())
+                + Text(verbatim: " · \(reason)").foregroundStyle(.secondary))
             .font(.caption).lineLimit(3)
     }
 
@@ -197,7 +210,7 @@ struct ApprovalRow: View {
                     if isProcessing { ProgressView().controlSize(.small) }
                     else if needsTouchID { Image(systemName: "touchid") }
                     else if isSession { Image(systemName: "person.badge.shield.checkmark") }
-                    Text(isProcessing ? "Authorizing…" : (isSession ? "Approve agent" : (isPerCall ? "Approve call" : "Approve")))
+                    Text(approveLabel)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -214,9 +227,16 @@ struct ApprovalRow: View {
         }
     }
 
+    private var approveLabel: LocalizedStringResource {
+        if isProcessing { return "Authorizing…" }
+        if isSession { return "Approve agent" }
+        if isPerCall { return "Approve call" }
+        return "Approve"
+    }
+
     /// The command with danger tokens highlighted red.
     private var highlightedCommand: AttributedString {
-        let text = ApprovalPresentation.primaryActionText(request.action)
+        let text = ApprovalCopy.actionText(request.action)
         var attributed = AttributedString(text)
         for range in ApprovalPresentation.dangerRanges(in: text, tokens: request.action.dangerTokens) {
             let lower = text.distance(from: text.startIndex, to: range.lowerBound)

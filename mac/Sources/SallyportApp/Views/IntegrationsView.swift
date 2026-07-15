@@ -51,7 +51,7 @@ private struct SnippetBox: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            SectionHeader(title, systemImage: "chevron.left.forwardslash.chevron.right") {
+            SectionHeader(verbatim: title, systemImage: "chevron.left.forwardslash.chevron.right") {
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(snippet, forType: .string)
@@ -65,7 +65,7 @@ private struct SnippetBox: View {
                 .buttonStyle(.borderless)
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(snippet)
+                Text(verbatim: snippet)
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
                     .padding(Theme.Spacing.md)
@@ -86,7 +86,7 @@ enum Integration: String, CaseIterable, Identifiable {
         SallyportSetup.bundledBinary("sp")?.path
         ?? Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/sp").path
 
-    var title: String {
+    var title: LocalizedStringResource {
         switch self {
         case .claudeCode: return "Claude Code"
         case .cursor: return "Cursor"
@@ -102,7 +102,7 @@ enum Integration: String, CaseIterable, Identifiable {
         case .genericMCP: return "puzzlepiece.extension"
         }
     }
-    var subtitle: String {
+    var subtitle: LocalizedStringResource {
         switch self {
         case .claudeCode: return "Terminal command or .mcp.json entry"
         case .cursor: return "Add to ~/.cursor/mcp.json"
@@ -110,7 +110,7 @@ enum Integration: String, CaseIterable, Identifiable {
         case .genericMCP: return "Any stdio MCP client"
         }
     }
-    var instructions: String {
+    var instructions: LocalizedStringResource {
         switch self {
         case .claudeCode:
             return "Run the command once, or add the same entry to your project's .mcp.json. Sallyport attaches credentials only when sending requests."

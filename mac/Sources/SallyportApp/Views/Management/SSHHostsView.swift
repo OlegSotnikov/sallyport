@@ -33,7 +33,9 @@ final class HostsViewModel {
     func save(_ host: Host, isNew: Bool) async -> Bool {
         do {
             try await mgmt.setHost(host)
-            toast = .ok(isNew ? "Added '\(host.name)'" : "Updated '\(host.name)'")
+            toast = .ok(isNew
+                ? String(localized: "Added ‘\(host.name)’")
+                : String(localized: "Updated ‘\(host.name)’"))
             await load()
             return true
         } catch {
@@ -44,7 +46,7 @@ final class HostsViewModel {
     func delete(_ name: String) async {
         do {
             try await mgmt.deleteHost(name: name)
-            toast = .ok("Deleted '\(name)'")
+            toast = .ok(String(localized: "Deleted ‘\(name)’"))
             await load()
         } catch { toast = .bad(describe(error)) }
     }
@@ -115,9 +117,9 @@ struct SSHHostsView: View {
             }
         } else {
             Table(vm.hosts, selection: $selection) {
-                TableColumn("Name") { host in Text(host.name).fontWeight(.medium).textSelection(.enabled) }
+                TableColumn("Name") { host in Text(verbatim: host.name).fontWeight(.medium).textSelection(.enabled) }
                 TableColumn("Address") { host in
-                    Text("\(host.user)@\(host.addr):\(host.port)").font(.callout.monospaced())
+                    Text(verbatim: "\(host.user)@\(host.addr):\(host.port)").font(.callout.monospaced())
                         .foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 TableColumn("Key") { host in
@@ -125,12 +127,16 @@ struct SSHHostsView: View {
                     else { Text("Not set").foregroundStyle(.tertiary) }
                 }
                 TableColumn("Host key") { host in
-                    Text(host.hostkey)
-                        .foregroundStyle(host.hostkey == "strict" ? Theme.verified : Theme.warning)
-                        .font(.caption)
+                    if host.hostkey == "strict" {
+                        Text("Strict").foregroundStyle(Theme.verified).font(.caption)
+                    } else if host.hostkey == "accept-new" {
+                        Text("Trust on first use").foregroundStyle(Theme.warning).font(.caption)
+                    } else {
+                        Text(verbatim: host.hostkey).foregroundStyle(Theme.warning).font(.caption)
+                    }
                 }
                 TableColumn("Tags") { host in
-                    Text(host.tags.joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1).font(.caption)
+                    Text(verbatim: host.tags.joined(separator: ", ")).foregroundStyle(.secondary).lineLimit(1).font(.caption)
                 }
                 TableColumn("") { host in
                     Menu {
@@ -185,8 +191,8 @@ private struct HostEditor: View {
         self.onSave = onSave
         _name = State(initialValue: existing?.name ?? "")
         _addr = State(initialValue: existing?.addr ?? "")
-        _user = State(initialValue: existing?.user ?? "os")
-        _port = State(initialValue: existing?.port ?? 442)
+        _user = State(initialValue: existing?.user ?? "deploy")
+        _port = State(initialValue: existing?.port ?? 22)
         _tags = State(initialValue: existing?.tags ?? [])
         _keyRef = State(initialValue: existing?.key ?? "")
         _hostkey = State(initialValue: existing?.hostkey ?? "accept-new")
@@ -205,31 +211,49 @@ private struct HostEditor: View {
 
     private var nameError: String? {
         guard shows("name") else { return nil }
-        if trimmedName.isEmpty { return "Give the host a name. Agents use it as the target." }
-        if nameCollision { return "A host named \(trimmedName) already exists." }
-        if trimmedName.contains(" ") { return "Use letters, digits, _ or - (no spaces)." }
+        if trimmedName.isEmpty { return String(localized: "Give the host a name. Agents use it as the target.") }
+        if nameCollision { return String(localized: "A host named \(trimmedName) already exists.") }
+        if trimmedName.contains(" ") { return String(localized: "Use letters, digits, _ or - (no spaces).") }
         return nil
     }
     private var addrError: String? {
         guard shows("addr"), addr.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return "Enter an IP address or DNS name."
+        return String(localized: "Enter an IP address or DNS name.")
     }
     private var userError: String? {
         guard shows("user"), user.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        return "The SSH user to log in as."
+        return String(localized: "Enter the SSH username.")
     }
     /// Non-blocking: a host with no key can be added, but ssh.exec can't run on it.
     private var keyWarning: String? {
-        keyRef.isEmpty ? "No key is selected. Agents cannot run commands on this host." : nil
+        keyRef.isEmpty
+            ? String(localized: "No key is selected. Agents cannot run commands on this host.")
+            : nil
+    }
+    private var sshKeyHint: LocalizedStringResource {
+        keys.isEmpty
+            ? LocalizedStringResource("Add an ssh-ed25519 key on Keys & APIs first.")
+            : LocalizedStringResource("References a stored key by name.")
     }
     private var missingFields: [String] {
         var out: [String] = []
-        if trimmedName.isEmpty || nameCollision || trimmedName.contains(" ") { out.append("Name") }
-        if addr.trimmingCharacters(in: .whitespaces).isEmpty { out.append("Address") }
-        if user.trimmingCharacters(in: .whitespaces).isEmpty { out.append("User") }
+        if trimmedName.isEmpty || nameCollision || trimmedName.contains(" ") {
+            out.append(String(localized: "Name"))
+        }
+        if addr.trimmingCharacters(in: .whitespaces).isEmpty {
+            out.append(String(localized: "Address"))
+        }
+        if user.trimmingCharacters(in: .whitespaces).isEmpty {
+            out.append(String(localized: "User"))
+        }
         return out
     }
     private var canSave: Bool { missingFields.isEmpty }
+    private var missingFieldsList: String {
+        missingFields.formatted(
+            .list(type: .and, width: .standard).locale(.autoupdatingCurrent)
+        )
+    }
 
     var body: some View {
         SheetScaffold(existing.map { "Edit host \($0.name)" } ?? "Add host",
@@ -238,39 +262,39 @@ private struct HostEditor: View {
                 FormRow(label: "Name",
                         hint: "Agents target the host by this name.",
                         isRequired: !isEditing, error: nameError) {
-                    TextField("ws-kz", text: $name).textFieldStyle(.roundedBorder).disabled(isEditing)
+                    TextField("web-prod", text: $name).textFieldStyle(.roundedBorder).disabled(isEditing)
                         .invalidField(nameError != nil)
                         .onChange(of: name) { touched.insert("name") }
                 }
                 FormRow(label: "Address", isRequired: true, error: addrError) {
-                    TextField("10.10.3.10", text: $addr).textFieldStyle(.roundedBorder)
+                    TextField("203.0.113.10", text: $addr).textFieldStyle(.roundedBorder)
                         .invalidField(addrError != nil)
                         .onChange(of: addr) { touched.insert("addr") }
                 }
                 FormRow(label: "User / port", isRequired: true, error: userError) {
                     HStack(spacing: 8) {
-                        TextField("os", text: $user).textFieldStyle(.roundedBorder).frame(width: 120)
+                        TextField("deploy", text: $user).textFieldStyle(.roundedBorder).frame(width: 120)
                             .invalidField(userError != nil)
                             .onChange(of: user) { touched.insert("user") }
-                        Text(":").foregroundStyle(.secondary)
-                        TextField("442", value: $port, format: .number).textFieldStyle(.roundedBorder).frame(width: 70)
+                        Text(verbatim: ":").foregroundStyle(.secondary)
+                        TextField("22", value: $port, format: .number).textFieldStyle(.roundedBorder).frame(width: 70)
                     }
                 }
-                FormRow(label: "SSH key",
-                        hint: keys.isEmpty ? "Add an ssh-ed25519 key on Keys & APIs first." : "References a stored key by name.",
+                FormRow(label: "SSH key", hint: sshKeyHint,
                         warning: keys.isEmpty ? nil : keyWarning) {
                     Picker("SSH key", selection: $keyRef) {
                         Text("None").tag("")
-                        ForEach(keys) { Text($0.name).tag($0.name) }
+                        ForEach(keys) { Text(verbatim: $0.name).tag($0.name) }
                     }
                     .labelsHidden().fixedSize()
                 }
-                FormRow(label: "Host key", hint: "strict = pin; accept-new = trust on first use.") {
+                FormRow(label: "Host key", hint: "Trust on first use records the first key seen. Strict mode requires a known key.") {
                     Picker("Host key policy", selection: $hostkey) {
-                        Text("accept-new").tag("accept-new")
-                        Text("strict").tag("strict")
+                        Text("Trust on first use").tag("accept-new")
+                        Text("Strict").tag("strict")
                     }
-                    .pickerStyle(.segmented).fixedSize()
+                    .pickerStyle(.segmented)
+                    .frame(minWidth: 250)
                 }
                 FormRow(label: "Tags") {
                     TokenEditor(tokens: $tags, placeholder: "fleet")
@@ -279,7 +303,7 @@ private struct HostEditor: View {
         } footer: {
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 if didAttemptSave, !missingFields.isEmpty {
-                    Label("Still needed: \(missingFields.joined(separator: ", "))",
+                    Label("Still needed: \(missingFieldsList)",
                           systemImage: "exclamationmark.circle.fill")
                         .font(.caption).foregroundStyle(Theme.danger)
                 }

@@ -7,7 +7,7 @@ struct TrustBadgePill: View {
 
     var body: some View {
         Label {
-            Text(badge.label).font(.caption).fontWeight(.semibold)
+            Text(localizedLabel).font(.caption).fontWeight(.semibold)
         } icon: {
             Image(systemName: badge.symbol).font(.caption)
         }
@@ -17,7 +17,20 @@ struct TrustBadgePill: View {
         .background(badge.tint.opacity(0.14), in: Capsule())
         .overlay(Capsule().strokeBorder(badge.tint.opacity(0.22)))
         .foregroundStyle(badge.tint)
-        .accessibilityLabel(badge.label)
+        .accessibilityLabel(Text(localizedLabel))
+    }
+
+    private var localizedLabel: LocalizedStringResource {
+        switch badge {
+        case .verified:
+            LocalizedStringResource("Verified")
+        case .unsignedInChain(let hopName, _):
+            LocalizedStringResource(
+                "Unsigned: \(hopName)",
+                comment: "Code-signature warning followed by a process name.")
+        case .unknown:
+            LocalizedStringResource("Verifying…")
+        }
     }
 }
 
@@ -35,7 +48,7 @@ struct ProcessChainView: View {
                 HStack(spacing: Theme.Spacing.xs + 2) {
                     Image(systemName: "point.3.filled.connected.trianglepath.dotted")
                         .foregroundStyle(.secondary)
-                    Text(ProvenanceEvaluator.chainSummary(chain))
+                    Text(verbatim: ProvenanceEvaluator.chainSummary(chain))
                         .font(.callout)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -54,6 +67,7 @@ struct ProcessChainView: View {
                 .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(Text(chainToggleLabel))
             .onHover { hovering = $0 }
             .animation(.easeOut(duration: 0.12), value: hovering)
 
@@ -70,6 +84,12 @@ struct ProcessChainView: View {
             }
         }
     }
+
+    private var chainToggleLabel: LocalizedStringResource {
+        expanded
+            ? LocalizedStringResource("Hide process chain")
+            : LocalizedStringResource("Show process chain")
+    }
 }
 
 private struct HopRow: View {
@@ -82,16 +102,19 @@ private struct HopRow: View {
                 .foregroundStyle(signatureTint)
                 .font(.caption)
                 .frame(width: 14)
-            Text(hop.appName ?? hop.name)
+            Text(verbatim: hop.appName ?? hop.name)
                 .font(.callout)
                 .fontWeight(isOrigin ? .semibold : .regular)
-            Text("pid \(hop.pid)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(verbatim: "pid \(hop.pid)")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             Spacer()
             Text(signatureText)
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(signatureTint)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 
@@ -109,11 +132,11 @@ private struct HopRow: View {
         case .none: return .secondary
         }
     }
-    private var signatureText: String {
+    private var signatureText: LocalizedStringResource {
         switch hop.validSignature {
-        case .some(true): return "signed"
-        case .some(false): return "unsigned"
-        case .none: return "unknown"
+        case .some(true): return LocalizedStringResource("Signed")
+        case .some(false): return LocalizedStringResource("Unsigned")
+        case .none: return LocalizedStringResource("Unknown")
         }
     }
 }
@@ -127,24 +150,40 @@ struct OriginHeader: View {
             iconView
                 .frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
-                Text(request.provenance.origin.appName ?? request.provenance.origin.name)
+                Text(verbatim: request.provenance.origin.appName ?? request.provenance.origin.name)
                     .font(Theme.Typography.screenTitle)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
                 if request.action.tool == "sallyport.request_credential" {
                     // The specific credential is collected in the next sheet.
                     Text("Requests a credential")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else if let host = request.action.host, !host.isEmpty {
-                    Text("Target: \(host)")
+                    Text(LocalizedStringResource(
+                        "Target: \(host)",
+                        comment: "Approval target followed by a host name."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Action: \(ApprovalPresentation.toolLabel(request.action.tool))")
+                    Text(LocalizedStringResource(
+                        "Action: \(localizedToolLabel)",
+                        comment: "Approval action followed by a localized tool name or protocol identifier."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
+            .layoutPriority(1)
             Spacer()
+        }
+    }
+
+    private var localizedToolLabel: String {
+        switch request.action.tool {
+        case "http.request": String(localized: "HTTP request")
+        case "ssh.exec": String(localized: "SSH command")
+        case "sallyport.request_credential": String(localized: "Credential request")
+        default: request.action.tool
         }
     }
 

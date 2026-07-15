@@ -26,12 +26,21 @@ final class AllowlistViewModel {
     }
 
     func add(_ item: AllowlistItem) async -> Bool {
-        do { try await mgmt.addAllowlist(item); toast = .ok("Added \(item.label)"); await load(); return true }
+        do {
+            try await mgmt.addAllowlist(item)
+            toast = .ok(String(localized: "Added \(item.label)"))
+            await load()
+            return true
+        }
         catch { toast = .bad(describe(error)); return false }
     }
 
     func delete(_ item: AllowlistItem) async {
-        do { try await mgmt.deleteAllowlist(id: item.id); toast = .ok("Removed \(item.label)"); await load() }
+        do {
+            try await mgmt.deleteAllowlist(id: item.id)
+            toast = .ok(String(localized: "Removed \(item.label)"))
+            await load()
+        }
         catch { toast = .bad(describe(error)) }
     }
 }
@@ -108,8 +117,8 @@ struct AllowlistView: View {
         panel.allowedContentTypes = [.application, .unixExecutable, .executable]
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
-        panel.message = "Choose the app or executable to allowlist. For scripts, add the running process from Sessions."
+        panel.prompt = String(localized: "Choose")
+        panel.message = String(localized: "Choose the app or executable to allowlist. For scripts, add the running process from Sessions.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task { if let cap = await vm.capture(path: url.path) { pending = cap } }
     }
@@ -124,11 +133,15 @@ private struct AllowlistRow: View {
             Image(systemName: item.kind == "publisher" ? "checkmark.seal.fill" : "number")
                 .foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.label).font(.callout.weight(.medium))
+                Text(verbatim: item.label).font(.callout.weight(.medium))
                 Text(detail).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(item.scopeHosts.isEmpty ? "Scope: any target" : "Scope: \(item.scopeHosts.joined(separator: ", "))")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                if item.scopeHosts.isEmpty {
+                    Text("Scope: any target").font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    Text("Scope: \(item.scopeHosts.joined(separator: ", "))")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Button(role: .destructive) { onDelete() } label: { Image(systemName: "trash") }
@@ -138,10 +151,13 @@ private struct AllowlistRow: View {
         .cardSurface(radius: Theme.Radius.md)
     }
 
-    private var detail: String {
+    private var detail: LocalizedStringResource {
         if item.kind == "publisher" {
             let team = item.teamID.isEmpty ? "?" : item.teamID
-            return "Publisher · Team \(team)\(item.bundleID.isEmpty ? "" : " · \(item.bundleID)") · includes updates"
+            if item.bundleID.isEmpty {
+                return "Publisher · Team \(team) · includes updates"
+            }
+            return "Publisher · Team \(team) · \(item.bundleID) · includes updates"
         }
         let h = item.cdhashes.first.map { String($0.prefix(16)) } ?? "?"
         return "Pinned version · cdhash \(h)… · updates require a new entry"
@@ -164,7 +180,9 @@ struct AllowlistConfirmSheet: View {
         SheetScaffold("Allowlist this agent", systemImage: "person.2.badge.key") {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 labeled("Agent", capture.label)
-                labeled("Signed", capture.signed ? "Yes: \(capture.authority)" : "No (unsigned or ad hoc)")
+                labeled("Signed", capture.signed
+                    ? String(localized: "Yes: \(capture.authority)")
+                    : String(localized: "No (unsigned or ad hoc)"))
                 if !capture.teamID.isEmpty { labeled("Team", capture.teamID) }
                 if !capture.bundleID.isEmpty { labeled("Bundle", capture.bundleID) }
                 labeled("From", capture.capturedFrom)
@@ -182,10 +200,19 @@ struct AllowlistConfirmSheet: View {
                 }
                 .pickerStyle(.radioGroup)
                 .disabled(!canPublisher && usePublisher)
-                Text(usePublisher
-                     ? "Matches future builds signed by \(capture.teamID.isEmpty ? "this team" : capture.teamID)\(capture.bundleID.isEmpty ? "" : " with bundle \(capture.bundleID)"). Use only if you trust future updates from that signer."
-                     : "Matches only this binary. An update requires session approval or a new allowlist entry.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if usePublisher {
+                    let team = capture.teamID.isEmpty ? String(localized: "this team") : capture.teamID
+                    if capture.bundleID.isEmpty {
+                        Text("Matches future builds signed by \(team). Use only if you trust future updates from that signer.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Matches future builds signed by \(team) with bundle \(capture.bundleID). Use only if you trust future updates from that signer.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text("Matches only this binary. An update requires session approval or a new allowlist entry.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if !canPublisher {
                     Text("Publisher matching requires a Team ID.")
                         .font(.caption2).foregroundStyle(.tertiary)
@@ -212,10 +239,10 @@ struct AllowlistConfirmSheet: View {
         }
     }
 
-    private func labeled(_ k: String, _ v: String) -> some View {
+    private func labeled(_ key: LocalizedStringResource, _ value: String) -> some View {
         HStack(alignment: .top) {
-            Text(k).font(.caption.weight(.semibold)).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
-            Text(v).font(.caption).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(key).font(.caption.weight(.semibold)).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+            Text(verbatim: value).font(.caption).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
 

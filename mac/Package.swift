@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Sallyport",
+    defaultLocalization: "en",
     platforms: [
         // macOS 14 provides @Observable, MenuBarExtra, and CryptoKit SecureEnclave.
         // Secure Enclave and Touch ID require a signed app bundle; see README.md.
@@ -56,6 +57,9 @@ let package = Package(
             dependencies: [
                 "SallyportKit", "SallyportVault",
                 .product(name: "Sparkle", package: "Sparkle"),
+            ],
+            resources: [
+                .process("Resources/Localizable.xcstrings"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6)

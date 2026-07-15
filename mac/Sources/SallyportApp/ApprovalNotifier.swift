@@ -31,11 +31,11 @@ final class ApprovalNotifier: NSObject {
         // Approve activates the app so biometric modes can present Touch ID.
         let approve = UNNotificationAction(
             identifier: ApprovalNotification.ActionID.approve,
-            title: "Approve",
+            title: String(localized: "Approve", comment: "Approval notification action"),
             options: [.foreground])
         let deny = UNNotificationAction(
             identifier: ApprovalNotification.ActionID.deny,
-            title: "Deny",
+            title: String(localized: "Deny", comment: "Approval notification action"),
             options: [.destructive])
         let category = UNNotificationCategory(
             identifier: ApprovalNotification.categoryIdentifier,
@@ -91,8 +91,8 @@ final class ApprovalNotifier: NSObject {
         let spec = ApprovalNotification.content(for: request)
         let content = UNMutableNotificationContent()
         content.title = spec.title
-        content.subtitle = spec.subtitle
-        content.body = spec.body
+        content.subtitle = ApprovalCopy.notificationSubtitle(for: request)
+        content.body = ApprovalCopy.reason(spec.body)
         content.categoryIdentifier = spec.categoryIdentifier
         content.userInfo = ["requestID": spec.requestID]
         content.interruptionLevel = .timeSensitive
@@ -120,9 +120,13 @@ final class ApprovalNotifier: NSObject {
         guard let center else { return }
         let origin = req.provenance.origin.appName ?? req.provenance.origin.name
         let content = UNMutableNotificationContent()
-        content.title = "\(origin) needs a key"
-        content.subtitle = "Add a credential for \(req.host)"
-        content.body = req.purpose.isEmpty ? "Open Sallyport to add the key." : req.purpose
+        content.title = String(localized: "\(origin) needs a key",
+                               comment: "Credential notification title; origin is an application or process name")
+        content.subtitle = String(localized: "Add a credential for \(req.host)",
+                                  comment: "Credential notification subtitle; host is a server name")
+        content.body = req.purpose.isEmpty
+            ? String(localized: "Open Sallyport to add the key.")
+            : req.purpose
         content.userInfo = ["requestID": req.id]
         content.interruptionLevel = .timeSensitive
         content.sound = .default
@@ -141,8 +145,8 @@ final class ApprovalNotifier: NSObject {
         guard let center else { return }
         let content = UNMutableNotificationContent()
         content.title = "Sallyport"
-        content.subtitle = "Test notification"
-        content.body = "Approvals will appear here."
+        content.subtitle = String(localized: "Test notification")
+        content.body = String(localized: "Approvals will appear here.")
         content.interruptionLevel = .timeSensitive
         content.sound = .default
         // A test notification has no requesting-app attachment.

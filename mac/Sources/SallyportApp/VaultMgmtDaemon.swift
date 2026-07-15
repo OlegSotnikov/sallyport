@@ -19,7 +19,10 @@ final class VaultMgmtDaemon {
     struct Failure: Error {
         let message: String
         let code: String?
-        init(_ message: String, code: String? = nil) { self.message = message; self.code = code }
+        init(_ message: LocalizedStringResource, code: String? = nil) {
+            self.message = String(localized: message)
+            self.code = code
+        }
     }
 
     /// Applies the Touch ID change gate at the management API boundary.
@@ -43,23 +46,56 @@ final class VaultMgmtDaemon {
 
     /// The mutation name shown in the biometric prompt.
     private static func changeReason(op: String, arg: JSONValue?) -> String {
-        let name = arg?.objectValue?["name"]?.stringValue ?? ""
-        let quoted = name.isEmpty ? "" : " \"\(name)\""
+        let object = arg?.objectValue
+        let name = object?["name"]?.stringValue ?? object?["label"]?.stringValue ?? ""
         switch op {
-        case "secrets.set":    return "Add the key\(quoted)"
-        case "secrets.update": return "Change the key\(quoted)"
-        case "secrets.rotate": return "Rotate the key\(quoted)"
-        case "secrets.delete": return "Delete the key\(quoted)"
-        case "hosts.set":      return "Add or change the SSH host\(quoted)"
-        case "hosts.delete":   return "Delete the SSH host\(quoted)"
-        case "upstreams.set":  return "Add or change the MCP server\(quoted)"
-        case "upstreams.delete": return "Delete the MCP server\(quoted)"
-        case "upstreams.authorize": return "Sign in to the MCP server\(quoted)"
-        case "upstreams.disconnect": return "Sign out of the MCP server\(quoted)"
+        case "secrets.set":
+            return name.isEmpty
+                ? String(localized: "Add a key")
+                : String(localized: "Add the key “\(name)”")
+        case "secrets.update":
+            return name.isEmpty
+                ? String(localized: "Change a key")
+                : String(localized: "Change the key “\(name)”")
+        case "secrets.rotate":
+            return name.isEmpty
+                ? String(localized: "Rotate a key")
+                : String(localized: "Rotate the key “\(name)”")
+        case "secrets.delete":
+            return name.isEmpty
+                ? String(localized: "Delete a key")
+                : String(localized: "Delete the key “\(name)”")
+        case "hosts.set":
+            return name.isEmpty
+                ? String(localized: "Add or change an SSH host")
+                : String(localized: "Add or change the SSH host “\(name)”")
+        case "hosts.delete":
+            return name.isEmpty
+                ? String(localized: "Delete an SSH host")
+                : String(localized: "Delete the SSH host “\(name)”")
+        case "upstreams.set":
+            return name.isEmpty
+                ? String(localized: "Add or change an MCP server")
+                : String(localized: "Add or change the MCP server “\(name)”")
+        case "upstreams.delete":
+            return name.isEmpty
+                ? String(localized: "Delete an MCP server")
+                : String(localized: "Delete the MCP server “\(name)”")
+        case "upstreams.authorize":
+            return name.isEmpty
+                ? String(localized: "Sign in to an MCP server")
+                : String(localized: "Sign in to the MCP server “\(name)”")
+        case "upstreams.disconnect":
+            return name.isEmpty
+                ? String(localized: "Sign out of an MCP server")
+                : String(localized: "Sign out of the MCP server “\(name)”")
         case "settings.set":   return settingsChangeReason(arg)
-        case "allowlist.add":  return "Auto-approve the agent\(quoted.isEmpty ? " \"\(arg?.objectValue?["label"]?.stringValue ?? "")\"" : quoted)"
-        case "allowlist.delete": return "Remove an agent from the allowlist"
-        default:               return "Change Sallyport configuration"
+        case "allowlist.add":
+            return name.isEmpty
+                ? String(localized: "Add an agent to the allowlist")
+                : String(localized: "Add the agent “\(name)” to the allowlist")
+        case "allowlist.delete": return String(localized: "Remove an agent from the allowlist")
+        default: return String(localized: "Change Sallyport configuration")
         }
     }
 
@@ -67,14 +103,21 @@ final class VaultMgmtDaemon {
     private static func settingsChangeReason(_ arg: JSONValue?) -> String {
         let o = arg?.objectValue
         if let v = o?["sessionAuth"]?.stringValue {
-            let mode = ["off": "Off", "click": "One click", "touchid": "Touch ID"][v] ?? v
-            return "Set new-agent approval to \"\(mode)\""
+            let mode: String = switch v {
+            case "off": String(localized: "Off")
+            case "click": String(localized: "One click")
+            case "touchid": String(localized: "Touch ID")
+            default: v
+            }
+            return String(localized: "Set new-agent approval to “\(mode)”")
         }
-        if o?["autoLockMinutes"] != nil { return "Change the auto-lock timeout" }
-        if o?["lockOnScreenLock"] != nil { return "Change lock-on-screen-lock" }
-        if o?["requireTouchIDForChanges"] != nil { return "Change whether config changes need Touch ID" }
-        if o?["logBodies"] != nil { return "Change the compatibility logBodies setting" }
-        return "Change Sallyport security settings"
+        if o?["autoLockMinutes"] != nil { return String(localized: "Change the auto-lock timeout") }
+        if o?["lockOnScreenLock"] != nil { return String(localized: "Change whether screen lock locks the vault") }
+        if o?["requireTouchIDForChanges"] != nil {
+            return String(localized: "Change whether configuration changes require Touch ID")
+        }
+        if o?["logBodies"] != nil { return String(localized: "Change the compatibility logging setting") }
+        return String(localized: "Change Sallyport security settings")
     }
 
     /// Operations that always require Touch ID.
@@ -90,7 +133,8 @@ final class VaultMgmtDaemon {
         } catch let f as Failure {
             return .mgmtReply(id: id, ok: false, result: nil, error: f.message, detail: nil, code: f.code)
         } catch {
-            return .mgmtReply(id: id, ok: false, result: nil, error: "\(error)", detail: nil, code: nil)
+            let text = String(localized: "Sallyport could not complete the management request: \(error.localizedDescription)")
+            return .mgmtReply(id: id, ok: false, result: nil, error: text, detail: nil, code: nil)
         }
     }
 
@@ -167,7 +211,7 @@ final class VaultMgmtDaemon {
         case "allowlist.delete":  try await deleteAllowlist(arg); return .object([:])
 
         default:
-            throw Failure("unknown op \"\(op)\"")
+            throw Failure("Sallyport does not support the management operation “\(op)”.")
         }
     }
 
@@ -207,10 +251,10 @@ final class VaultMgmtDaemon {
 
     private func setSecret(_ arg: JSONValue?) async throws {
         guard let o = arg?.objectValue, let name = o["name"]?.stringValue, !name.isEmpty else {
-            throw Failure("secrets.set requires a name")
+            throw Failure("Enter a key name.")
         }
         guard let value = o["value"]?.stringValue, !value.isEmpty else {
-            throw Failure("secrets.set requires a value")
+            throw Failure("Enter a key value.")
         }
         let store = try await requireUnlockedStore()
         let kind = o["kind"]?.stringValue ?? "bearer"
@@ -236,20 +280,20 @@ final class VaultMgmtDaemon {
         } catch SSHKeyImport.ImportError.passphraseRequired {
             // Stable message + code: the add-key sheet shows the passphrase field
             // and retries (MgmtError.isPassphraseRequired matches both).
-            throw Failure("ssh private key is passphrase-protected; provide the passphrase",
+            throw Failure("This key is password-protected. Enter its passphrase to import it.",
                           code: MgmtError.passphraseRequiredCode)
         } catch SSHKeyImport.ImportError.invalid(let reason) {
-            throw Failure(reason)
+            throw Failure("The SSH private key is invalid: \(reason)")
         }
     }
 
     private func updateSecret(_ arg: JSONValue?) async throws {
         guard let o = arg?.objectValue, let name = o["name"]?.stringValue else {
-            throw Failure("secrets.update requires a name")
+            throw Failure("Choose a key to update.")
         }
         let store = try await requireUnlockedStore()
         guard let existing = try? await store.meta(name: name) else {
-            throw Failure("no such secret \"\(name)\"")
+            throw Failure("No key named “\(name)” exists.")
         }
         var inject = existing.inject
         if let h = o["header"]?.stringValue { inject.header = h }
@@ -263,11 +307,11 @@ final class VaultMgmtDaemon {
     private func rotateSecret(_ arg: JSONValue?) async throws {
         guard let o = arg?.objectValue, let name = o["name"]?.stringValue,
               let value = o["value"]?.stringValue, !value.isEmpty else {
-            throw Failure("secrets.rotate requires a name and value")
+            throw Failure("Choose a key and enter its new value.")
         }
         let store = try await requireUnlockedStore()
         guard let existing = try? await store.meta(name: name) else {
-            throw Failure("no such secret \"\(name)\"")
+            throw Failure("No key named “\(name)” exists.")
         }
         var bytes = try Self.importValue(kind: existing.kind, value: value,
                                          passphrase: o["passphrase"]?.stringValue ?? "")
@@ -281,7 +325,7 @@ final class VaultMgmtDaemon {
 
     private func deleteSecret(_ arg: JSONValue?) async throws {
         guard let name = arg?.objectValue?["name"]?.stringValue else {
-            throw Failure("secrets.delete requires a name")
+            throw Failure("Choose a key to delete.")
         }
         let store = try await requireUnlockedStore()
         _ = try await store.delete(name: name)
@@ -328,7 +372,7 @@ final class VaultMgmtDaemon {
     }
 
     private func deleteHost(_ arg: JSONValue?) async throws {
-        guard let name = arg?.objectValue?["name"]?.stringValue else { throw Failure("hosts.delete requires a name") }
+        guard let name = arg?.objectValue?["name"]?.stringValue else { throw Failure("Choose an SSH host to delete.") }
         _ = try await runtime.host?.hosts.delete(name)
     }
 
@@ -366,7 +410,7 @@ final class VaultMgmtDaemon {
         guard let host = runtime.host else { throw Failure("Create your vault first.") }
         guard let name = arg?.objectValue?["name"]?.stringValue,
               let entry = host.upstreams.get(name) else {
-            throw Failure("upstreams.authorize requires a known server name")
+            throw Failure("Choose an MCP server that still exists.")
         }
         guard entry.usesOAuth else {
             throw Failure("\(name) does not use OAuth. Set authentication to OAuth first.")
@@ -376,13 +420,13 @@ final class VaultMgmtDaemon {
                 Task { @MainActor in NSWorkspace.shared.open(url) }
             })
         } catch let e as MCPOAuth.OAuthError {
-            throw Failure(e.description)
+            throw Failure("MCP sign-in failed: \(e.description)")
         } catch let e as LoopbackCallbackServer.CallbackError {
-            throw Failure(e.description)
+            throw Failure("MCP sign-in failed: \(e.description)")
         } catch VaultStoreError.locked {
             throw Failure("The vault is locked. Unlock it first.", code: "locked")
         } catch {
-            throw Failure("Sign-in failed: \(error)")
+            throw Failure("Sign-in failed: \(error.localizedDescription)")
         }
         guard let fresh = host.upstreams.get(name) else { throw Failure("The MCP server was removed during sign-in.") }
         return try .encoding(await Self.toWire(fresh, manager: host.upstreamManager))
@@ -391,7 +435,7 @@ final class VaultMgmtDaemon {
     private func disconnectUpstream(_ arg: JSONValue?) async throws {
         guard let host = runtime.host else { throw Failure("Create your vault first.") }
         guard let name = arg?.objectValue?["name"]?.stringValue else {
-            throw Failure("upstreams.disconnect requires a name")
+            throw Failure("Choose an MCP server to sign out of.")
         }
         try await host.upstreamManager.oauthDisconnect(upstream: name)
     }
@@ -402,28 +446,28 @@ final class VaultMgmtDaemon {
         let name = u.name.lowercased()
         guard !name.isEmpty, name.count <= 40,
               name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) else {
-            throw Failure("upstream name must be 1-40 characters from [a-z0-9_-]")
+            throw Failure("Use 1–40 letters, numbers, hyphens, or underscores for the server name.")
         }
         guard !Self.reservedUpstreamNames.contains(name) else {
-            throw Failure("\(name) is reserved for a built-in channel")
+            throw Failure("\(name) is reserved for a built-in channel.")
         }
         switch u.transport {
         case "stdio":
             guard !u.command.trimmingCharacters(in: .whitespaces).isEmpty else {
-                throw Failure("a local (stdio) MCP server needs a command to run")
+                throw Failure("Enter a command for the local MCP server.")
             }
         case "http":
             guard UpstreamManager.validatedRemoteURL(u.url) != nil else {
                 throw Failure("Remote MCP servers require HTTPS; loopback HTTP is allowed.")
             }
             guard ["apikey", "oauth"].contains(u.auth) else {
-                throw Failure("unknown authentication \"\(u.auth)\"; use API key or OAuth")
+                throw Failure("Choose API key or OAuth authentication.")
             }
         default:
-            throw Failure("unknown transport \"\(u.transport)\"; use stdio or http")
+            throw Failure("Choose a local (stdio) or remote (HTTP) transport.")
         }
         guard ["", "click", "touchid"].contains(u.confirm) else {
-            throw Failure("unknown per-call approval \"\(u.confirm)\"")
+            throw Failure("Choose Off, One click, or Touch ID for per-call approval.")
         }
         // Remove OAuth tokens when the endpoint or authentication method changes.
         if let prior = host.upstreams.get(name) {
@@ -442,7 +486,7 @@ final class VaultMgmtDaemon {
 
     private func deleteUpstream(_ arg: JSONValue?) async throws {
         guard let name = arg?.objectValue?["name"]?.stringValue else {
-            throw Failure("upstreams.delete requires a name")
+            throw Failure("Choose an MCP server to delete.")
         }
         // Remove OAuth tokens with the server entry.
         try? await runtime.host?.upstreamManager.oauthDisconnect(upstream: name)
@@ -484,7 +528,7 @@ final class VaultMgmtDaemon {
         if let raw = o["sessionAuth"]?.stringValue,
            ![SettingsStore.sessionAuthOff, SettingsStore.sessionAuthClick,
              SettingsStore.sessionAuthTouchID].contains(raw) {
-            throw Failure("unknown session authorization \"\(raw)\"; use off, click, or touchid")
+            throw Failure("Choose Off, One click, or Touch ID for new-agent approval.")
         }
         try await host.settings.update { st in
             if let v = o["sessionAuth"]?.stringValue { st.sessionAuth = v }
@@ -531,9 +575,9 @@ final class VaultMgmtDaemon {
         } else if let path = o?["path"]?.stringValue {
             cap = SallyportVault.Provenance.captureIdentity(path: path)
         } else {
-            throw Failure("allowlist.capture needs a pid or a path")
+            throw Failure("Choose a running process or executable.")
         }
-        guard let cap else { throw Failure("couldn't read the code signature of that process or file") }
+        guard let cap else { throw Failure("Sallyport could not read the code signature of that process or file.") }
         let preview = AllowlistCapturePreview(
             label: cap.label, cdhashes: cap.cdhashes, teamID: cap.teamID, bundleID: cap.bundleID,
             signed: cap.signed, authority: cap.authority, capturedFrom: cap.capturedFrom,
@@ -544,7 +588,7 @@ final class VaultMgmtDaemon {
     private func addAllowlist(_ arg: JSONValue?) async throws {
         guard let host = runtime.host,
               let item = try? arg?.decoded(AllowlistItem.self) else {
-            throw Failure("allowlist.add needs an entry")
+            throw Failure("Choose an agent to add to the allowlist.")
         }
         let kind: AllowlistEntry.Kind = item.kind == "publisher" ? .publisher : .cdhash
         let entry = AllowlistEntry(
@@ -553,13 +597,15 @@ final class VaultMgmtDaemon {
             cdhashes: item.cdhashes, requirement: item.requirement,
             teamID: item.teamID, bundleID: item.bundleID,
             capturedFrom: item.capturedFrom, scopeHosts: item.scopeHosts)
-        guard entry.isUsable else { throw Failure("that entry has no usable matcher (empty hash / requirement)") }
+        guard entry.isUsable else {
+            throw Failure("Sallyport could not identify that executable. Choose another file or running process.")
+        }
         try await host.allowlist.set(entry)
     }
 
     private func deleteAllowlist(_ arg: JSONValue?) async throws {
         guard let host = runtime.host, let id = arg?.objectValue?["id"]?.stringValue else {
-            throw Failure("allowlist.delete needs an id")
+            throw Failure("Choose an allowlist entry to remove.")
         }
         _ = try await host.allowlist.delete(id)
     }
