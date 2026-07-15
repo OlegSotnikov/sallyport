@@ -1,0 +1,42 @@
+# === Build artifacts ===
+# Go
+core/bin/
+# Swift
+mac/.build/
+mac/build/
+mac/build-loop/
+*.xcuserstate
+# Web
+web/node_modules/
+web/dist/
+web/dist-ssr/
+web/coverage/
+web/.vite/
+
+# === Runtime / secrets (never commit a live home) ===
+# The Sallyport home (vault, keystore, policy, audit) lives outside the repo,
+# but guard against a stray copy landing here.
+keystore.json
+vault.age
+audit*.jsonl
+upstreams.json
+*.age
+secrets/
+*.env
+!*.env.example
+!.env.example
+
+# === OS / editor ===
+.DS_Store
+*.log
+*.local
+.idea/
+*.swp
+
+# built binaries
+/core/sp-ssh
+/core/bin/
+
+# Signing artifacts / throwaway profile-minting project (not source)
+/app/
+mac/dev.sallyport.provisionprofile
