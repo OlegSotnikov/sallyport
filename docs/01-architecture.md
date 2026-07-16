@@ -30,7 +30,7 @@ sp mcp  ->  ~/.sallyport/sallyport.sock  ->  Sallyport.app
 | `Sallyport.app` | Owns all persistent and in-memory product state. |
 | `sp mcp` | Translates MCP over stdio to newline-delimited JSON on the app socket. It stores no state. |
 | `sp-ssh` | Runs one SSH operation. It stores no vault state and receives signatures instead of the stored private key. |
-| Engine | Applies the fixed ladder, records intent, dispatches the action, and redacts output. |
+| Engine | Applies the fixed ladder, records intent, dispatches the action, and returns bounded executor results. |
 | Approval UI | Resolves session and per-call cards in process. Touch ID is used only by biometric modes. |
 | Vault | Seals credentials and configuration and resolves bound credentials at use time. |
 | Audit | Appends encrypted, hash-chained, signed events. A durable intent gates each side effect. |
@@ -48,7 +48,8 @@ For each tool call, the app:
 5. Writes a durable audit intent. Failure stops execution.
 6. Commits any new session and rechecks the vault lifecycle.
 7. Executes HTTP, SSH, credential provisioning, or an upstream MCP call.
-8. Rechecks the lifecycle, redacts output, attempts to append the outcome event, and returns the result.
+8. Rechecks the lifecycle, attempts to append the outcome event, and returns the bounded executor
+   result without content inspection or rewriting.
 
 A lifecycle change before execution rejects admission. A change during execution discards the result but cannot undo a side effect that already completed.
 
@@ -60,7 +61,7 @@ The request's `identity` field is a label. Authorization uses the kernel-observe
 
 A session represents one live process. It ends on process exit, revocation, vault lock, or app exit. Sessions and their ended-state UI are held only for the current app run. Session lifecycle events are also written to the audit journal.
 
-The optional allowlist matches a live process by exact cdhash or publisher requirement. It skips only the session card. Per-call approval, the vault gate, target binding, audit, redaction, and lifecycle checks still apply.
+The optional allowlist matches a live process by exact cdhash or publisher requirement. It skips only the session card. Per-call approval, the vault gate, target binding, audit, and lifecycle checks still apply.
 
 ## State
 
@@ -80,7 +81,7 @@ The audit journal under `~/.sallyport/audit` is sealed to a separate P-256 recip
 
 Live sessions, pending approvals, credential prompts, and cached upstream state are memory-only and are cleared on lock. The software keystore is limited to development and tests.
 
-See [04-vault.md](04-vault.md) and [06-audit-dlp.md](06-audit-dlp.md) for storage details.
+See [04-vault.md](04-vault.md) and [06-audit.md](06-audit.md) for storage details.
 
 ## Channel boundaries
 
@@ -92,7 +93,9 @@ See [04-vault.md](04-vault.md) and [06-audit-dlp.md](06-audit-dlp.md) for storag
 | Remote MCP | The app attaches a host-bound API key or uses its sealed OAuth grant. |
 | Credential request | The app collects the value in a separate sheet and returns only provisioning metadata. |
 
-All channels use the same engine, approval flow, audit chain, and output redaction. Traffic sent outside Sallyport is outside its control.
+All channels use the same engine, approval flow, and audit chain. Executor results are returned or
+preserved within channel size limits without content inspection or rewriting and may contain
+sensitive data. Traffic sent outside Sallyport is outside its control.
 
 ## Deployment and failure behavior
 

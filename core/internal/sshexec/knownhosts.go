@@ -24,8 +24,8 @@ import (
 // hostID is the "addr:port" the executor dialed, so a service on a different
 // port is a distinct trust anchor. The store backs two host-key policies:
 //
-//   - accept-new (TOFU): an unknown host is recorded on first sight and its
-//     acceptance is surfaced to the caller for audit; a changed key fails.
+//   - accept-new (TOFU): an unknown host is staged on first sight, then recorded
+//     only after client authentication succeeds; a changed key fails.
 //   - strict: the key must already be present and match, else the connect fails.
 type KnownHosts struct {
 	path string
@@ -88,21 +88,115 @@ func (kh *KnownHosts) add(hostID, keyLine string) error {
 	if _, err := fmt.Fprintf(f, "%s %s\n", hostID, keyLine); err != nil {
 		return errors.Join(err, f.Close())
 	}
-	// Persist the pin before connecting so a crash cannot cause a second TOFU.
+	// Durably persist the pin before the authenticated connection may open a
+	// session, so a crash cannot cause a second TOFU decision.
 	if err := f.Sync(); err != nil {
 		return errors.Join(err, f.Close())
 	}
 	return f.Close()
 }
 
-// callback builds an ssh.HostKeyCallback enforcing the given policy for hostID.
-// onAccept receives the SHA256 fingerprint of a new TOFU key.
-// The store mutex serializes the check-then-write so two concurrent first
-// connects to the same host cannot both record.
-func (kh *KnownHosts) callback(hostID, policy string, onAccept func(fp string)) ssh.HostKeyCallback {
-	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		return kh.verify(hostID, policy, key, onAccept)
+// hostKeyVerifier separates verification during key exchange from persistence
+// after client authentication. An unauthenticated peer may present a key, but it
+// must never be allowed to mutate the trust store merely by reaching key
+// exchange.
+type hostKeyVerifier struct {
+	known  *KnownHosts
+	hostID string
+	policy string
+
+	mu          sync.Mutex
+	pendingLine string
+	pendingFP   string
+}
+
+func (kh *KnownHosts) verifier(hostID, policy string) *hostKeyVerifier {
+	return &hostKeyVerifier{known: kh, hostID: hostID, policy: policy}
+}
+
+// callback validates the presented key against the current store. For an
+// unknown accept-new host it only stages the key in memory; commit performs the
+// durable check-and-write after SSH authentication succeeds.
+func (v *hostKeyVerifier) callback(_ string, _ net.Addr, key ssh.PublicKey) error {
+	if v.hostID == "" || strings.ContainsAny(v.hostID, " \t\r\n") {
+		return fmt.Errorf("sshexec: invalid known_hosts identity %q", v.hostID)
 	}
+
+	presented := marshalKey(key)
+	fingerprint := ssh.FingerprintSHA256(key)
+	unknown := false
+	err := v.known.withLock(func() error {
+		stored, found, err := v.known.lookup(v.hostID)
+		if err != nil {
+			return fmt.Errorf("sshexec: read known_hosts: %w", err)
+		}
+		switch {
+		case found && stored == presented:
+			return nil
+		case found:
+			return hostKeyMismatch(v.hostID, fingerprint)
+		case v.policy == hostKeyStrict:
+			return fmt.Errorf("sshexec: unknown host key for %s and hostkey policy is strict", v.hostID)
+		default:
+			unknown = true
+			return nil
+		}
+	})
+	if err != nil || !unknown {
+		return err
+	}
+
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.pendingLine != "" && v.pendingLine != presented {
+		return fmt.Errorf("sshexec: peer presented multiple host keys for %s", v.hostID)
+	}
+	v.pendingLine = presented
+	v.pendingFP = fingerprint
+	return nil
+}
+
+// commit atomically rechecks and persists a staged TOFU key under the
+// process-wide and cross-process locks. It must be called after
+// ssh.NewClientConn succeeds and before any command is opened. added is true
+// only when this connection performed the durable first write.
+func (v *hostKeyVerifier) commit() (added bool, fingerprint string, retErr error) {
+	v.mu.Lock()
+	presented := v.pendingLine
+	fingerprint = v.pendingFP
+	v.mu.Unlock()
+	if presented == "" {
+		return false, "", nil
+	}
+
+	err := v.known.withLock(func() error {
+		stored, found, err := v.known.lookup(v.hostID)
+		if err != nil {
+			return fmt.Errorf("sshexec: read known_hosts: %w", err)
+		}
+		switch {
+		case found && stored == presented:
+			// Another authenticated connection pinned the same key first.
+			return nil
+		case found:
+			return hostKeyMismatch(v.hostID, fingerprint)
+		default:
+			if err := v.known.add(v.hostID, presented); err != nil {
+				return fmt.Errorf("sshexec: record known_hosts (fail-closed): %w", err)
+			}
+			added = true
+			return nil
+		}
+	})
+	if err != nil {
+		return false, fingerprint, err
+	}
+	return added, fingerprint, nil
+}
+
+func hostKeyMismatch(hostID, fingerprint string) error {
+	return fmt.Errorf("sshexec: host key mismatch for %s (%s); refusing possible MITM or re-provision",
+		hostID, fingerprint)
 }
 
 // flock serializes TOFU checks across helper processes.
@@ -126,14 +220,12 @@ func (kh *KnownHosts) flock() (unlock func() error, err error) {
 	}, nil
 }
 
-// verify implements the accept-new/strict decision for one presented key.
-func (kh *KnownHosts) verify(hostID, policy string, key ssh.PublicKey, onAccept func(fp string)) (retErr error) {
-	if hostID == "" || strings.ContainsAny(hostID, " \t\r\n") {
-		return fmt.Errorf("sshexec: invalid known_hosts identity %q", hostID)
-	}
+// withLock serializes trust-store decisions in this process and across helper
+// processes. The callback must not retain references to mutable shared state.
+func (kh *KnownHosts) withLock(fn func() error) (retErr error) {
 	kh.mu.Lock()
 	defer kh.mu.Unlock()
-	// Serialize the check-then-write across processes too.
+	// Serialize each read/commit decision across processes too.
 	unlock, err := kh.flock()
 	if err != nil {
 		return fmt.Errorf("sshexec: lock known_hosts (fail-closed): %w", err)
@@ -143,29 +235,5 @@ func (kh *KnownHosts) verify(hostID, policy string, key ssh.PublicKey, onAccept 
 			retErr = errors.Join(retErr, fmt.Errorf("sshexec: unlock known_hosts: %w", err))
 		}
 	}()
-
-	presented := marshalKey(key)
-	stored, found, err := kh.lookup(hostID)
-	if err != nil {
-		return fmt.Errorf("sshexec: read known_hosts: %w", err)
-	}
-	switch {
-	case found && stored == presented:
-		return nil
-	case found && stored != presented:
-		// A changed key is never trusted under any policy.
-		return fmt.Errorf("sshexec: host key mismatch for %s (SHA256:%s); refusing possible MITM or re-provision",
-			hostID, ssh.FingerprintSHA256(key))
-	default: // unknown host
-		if policy == hostKeyStrict {
-			return fmt.Errorf("sshexec: unknown host key for %s and hostkey policy is strict", hostID)
-		}
-		if err := kh.add(hostID, presented); err != nil {
-			return fmt.Errorf("sshexec: record known_hosts (fail-closed): %w", err)
-		}
-		if onAccept != nil {
-			onAccept(ssh.FingerprintSHA256(key))
-		}
-		return nil
-	}
+	return fn()
 }

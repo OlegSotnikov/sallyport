@@ -1,6 +1,6 @@
 # Sallyport
 
-Sallyport is an Apple Silicon Mac app that executes agent API calls, SSH commands, and proxied MCP tools without returning Sallyport-managed credentials to the agent.
+Sallyport is an Apple Silicon Mac app that executes authenticated API, SSH, and proxied MCP actions without giving the agent direct access to its vault. Target results are returned without credential-content filtering.
 
 `Sallyport.app` hosts the vault, decision engine, approvals, audit, management UI, and agent socket in one process. The bundle includes the `sp mcp` shim and stateless `sp-ssh` helper. There is no daemon, server, Linux, or Docker build.
 
@@ -27,18 +27,21 @@ Every action follows the fixed ladder in [docs/14-trust-model.md](docs/14-trust-
 
 Approvals use a click or Touch ID and resolve in process. They are not signed grants. A separate Secure Enclave signer signs audit rows and integrity anchors.
 
-The app supports `http.request`, `ssh.exec`, `sallyport.request_credential`, and configured upstream MCP tools. The agent receives results, not credential values.
+The app supports `http.request`, `ssh.exec`, `sallyport.request_credential`, and configured upstream MCP tools. There is no credential-reveal route, but target and upstream results may contain credentials or other sensitive data.
 
 ## Build
 
 ```bash
 (cd core && go test -race ./...)
-(cd mac && swift build && swift test)
-(cd mac && ./build-app.sh)
-open mac/build/Sallyport.app
+(cd mac && swift build -c release && swift test)
 ```
 
-Run the Secure Enclave self-test from the signed bundle:
+Creating the signed `.app` bundle requires the matching Apple signing identity
+and provisioning profile and is performed by release CI. The public snapshot
+supports source compilation and tests; it cannot reproduce Apple's signature
+without the private signing material.
+
+Run the Secure Enclave self-test from an official signed bundle:
 
 ```bash
 mac/build/Sallyport.app/Contents/MacOS/Sallyport --selftest
@@ -55,7 +58,7 @@ Configure an MCP client to run `Sallyport.app/Contents/MacOS/sp mcp`. The shippe
 | [docs/02-channels.md](docs/02-channels.md) | HTTP, SSH, and upstream MCP |
 | [docs/04-vault.md](docs/04-vault.md) | vault and keystore |
 | [docs/05-approvals.md](docs/05-approvals.md) | session and per-call approvals |
-| [docs/06-audit-dlp.md](docs/06-audit-dlp.md) | audit, recordings, redaction |
+| [docs/06-audit.md](docs/06-audit.md) | audit, result handling, and recordings |
 | [docs/08-security-model.md](docs/08-security-model.md) | threats and residual risk |
 | [docs/11-reference.md](docs/11-reference.md) | settings, tools, operations, errors |
 

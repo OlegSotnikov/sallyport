@@ -31,6 +31,15 @@ struct ApprovalNotificationTests {
         #expect(c.iconSourcePath == Fixtures.hopClaudeCode.path)
     }
 
+    @Test("content: session and per-call prompts select scope-specific actions")
+    func categoryMatchesApprovalScope() {
+        let session = ApprovalNotification.content(for: Fixtures.sessionClaude)
+        #expect(session.categoryIdentifier == ApprovalNotification.sessionCategoryIdentifier)
+        #expect(session.subtitle == "Requests a Sallyport session")
+        #expect(ApprovalNotification.content(for: Fixtures.sshRestartNginx).categoryIdentifier
+                == ApprovalNotification.categoryIdentifier)
+    }
+
     @Test("content: falls back to the process name when there is no app name")
     func contentTitleFallsBackToProcessName() {
         var req = Fixtures.sshRestartNginx

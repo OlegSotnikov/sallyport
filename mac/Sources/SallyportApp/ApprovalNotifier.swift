@@ -28,21 +28,30 @@ final class ApprovalNotifier: NSObject {
         guard !registered else { return }
         guard let center else { return }
         registered = true
-        // Approve activates the app so biometric modes can present Touch ID.
-        let approve = UNNotificationAction(
+        // Approval actions activate the app so biometric modes can present Touch ID.
+        let allowSession = UNNotificationAction(
             identifier: ApprovalNotification.ActionID.approve,
-            title: String(localized: "Approve", comment: "Approval notification action"),
+            title: String(localized: "Allow session", comment: "Session approval notification action"),
+            options: [.foreground])
+        let approveCall = UNNotificationAction(
+            identifier: ApprovalNotification.ActionID.approve,
+            title: String(localized: "Approve call", comment: "Per-call approval notification action"),
             options: [.foreground])
         let deny = UNNotificationAction(
             identifier: ApprovalNotification.ActionID.deny,
             title: String(localized: "Deny", comment: "Approval notification action"),
             options: [.destructive])
-        let category = UNNotificationCategory(
-            identifier: ApprovalNotification.categoryIdentifier,
-            actions: [approve, deny],
+        let sessionCategory = UNNotificationCategory(
+            identifier: ApprovalNotification.sessionCategoryIdentifier,
+            actions: [allowSession, deny],
             intentIdentifiers: [],
             options: [])
-        center.setNotificationCategories([category])
+        let callCategory = UNNotificationCategory(
+            identifier: ApprovalNotification.categoryIdentifier,
+            actions: [approveCall, deny],
+            intentIdentifiers: [],
+            options: [])
+        center.setNotificationCategories([sessionCategory, callCategory])
         center.delegate = self
     }
 
@@ -92,7 +101,7 @@ final class ApprovalNotifier: NSObject {
         let content = UNMutableNotificationContent()
         content.title = spec.title
         content.subtitle = ApprovalCopy.notificationSubtitle(for: request)
-        content.body = ApprovalCopy.reason(spec.body)
+        content.body = ApprovalCopy.notificationBody(for: request)
         content.categoryIdentifier = spec.categoryIdentifier
         content.userInfo = ["requestID": spec.requestID]
         content.interruptionLevel = .timeSensitive

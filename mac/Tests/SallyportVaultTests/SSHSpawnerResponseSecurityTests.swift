@@ -19,15 +19,15 @@ struct SSHSpawnerResponseSecurityTests {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
-    @Test("a helper truncation flag fails closed before output or recording is accepted")
-    func truncatedResponseFailsClosed() throws {
+    @Test("a helper truncation preserves evidence for the later fail-closed translation")
+    func truncatedResponsePreservesEvidence() throws {
         let data = try response([
             "truncated": true,
             "castB64": Data("partial recording".utf8).base64EncodedString(),
         ])
-        #expect(throws: EngineError.self) {
-            _ = try SSHSpawner.decodeExecResponse(data)
-        }
+        let decoded = try SSHSpawner.decodeExecResponse(data)
+        #expect(decoded.truncated)
+        #expect(Data(base64Encoded: decoded.castB64) == Data("partial recording".utf8))
     }
 
     @Test("absent/false truncation flags remain compatible and full byte counts survive")
@@ -40,6 +40,21 @@ struct SSHSpawnerResponseSecurityTests {
         let explicitlyComplete = try SSHSpawner.decodeExecResponse(response(["truncated": false]))
         #expect(explicitlyComplete.exitCode == 0)
         #expect(explicitlyComplete.hostKeyFingerprint == "SHA256:test")
+        #expect(explicitlyComplete.helperError.isEmpty)
+    }
+
+    @Test("helper failures decode fingerprint and recording before error translation")
+    func failureEvidenceDecodes() throws {
+        let cast = Data("failed authentication cast".utf8)
+        let decoded = try SSHSpawner.decodeExecResponse(response([
+            "error": "sshexec: handshake: unable to authenticate",
+            "hostKeyFp": "SHA256:presented-host-key",
+            "castB64": cast.base64EncodedString(),
+        ]))
+
+        #expect(decoded.helperError == "sshexec: handshake: unable to authenticate")
+        #expect(decoded.hostKeyFingerprint == "SHA256:presented-host-key")
+        #expect(Data(base64Encoded: decoded.castB64) == cast)
     }
 
     @Test("invalid base64, field types, and impossible byte accounting are rejected")
@@ -53,6 +68,7 @@ struct SSHSpawnerResponseSecurityTests {
             ["hostKeyFp": 12],
             ["truncated": "yes"],
             ["castB64": false],
+            ["error": 7],
         ] {
             #expect(throws: EngineError.self) {
                 _ = try SSHSpawner.decodeExecResponse(response(changes))

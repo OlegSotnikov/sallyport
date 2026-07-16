@@ -2,49 +2,6 @@ import Testing
 import Foundation
 @testable import SallyportVault
 
-@Suite("DLP redaction")
-struct DLPTests {
-    @Test("masks known secret shapes")
-    func genericShapes() {
-        let body = Data(#"{"token":"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345","auth":"Bearer abcdefgh1234"}"#.utf8)
-        let (out, n) = DLP.redact(body)
-        let s = String(decoding: out, as: UTF8.self)
-        #expect(n >= 2)
-        #expect(!s.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"))
-        #expect(!s.contains("Bearer abcdefgh1234"))
-        #expect(s.contains("«redacted»"))
-    }
-
-    @Test("masks the exact injected credential with the credential marker")
-    func exactSecret() {
-        let secret = Data("cfat_not_a_generic_shape_9z".utf8)
-        let body = Data(#"{"echo":"cfat_not_a_generic_shape_9z"}"#.utf8)
-        let (out, n) = DLP.redactWith(body, secrets: [secret])
-        let s = String(decoding: out, as: UTF8.self)
-        #expect(n == 1)
-        #expect(!s.contains("cfat_not_a_generic_shape_9z"))
-        #expect(s.contains("«redacted:sallyport-credential»"))
-    }
-
-    @Test("a private key block is masked whole")
-    func privateKey() {
-        let body = Data("prefix\n-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\nBBBB\n-----END OPENSSH PRIVATE KEY-----\nsuffix".utf8)
-        let (out, n) = DLP.redact(body)
-        let s = String(decoding: out, as: UTF8.self)
-        #expect(n == 1)
-        #expect(!s.contains("PRIVATE KEY"))
-        #expect(s.contains("prefix") && s.contains("suffix"))
-    }
-
-    @Test("clean body is untouched, count 0")
-    func clean() {
-        let body = Data(#"{"status":"ok","zones":[]}"#.utf8)
-        let (out, n) = DLP.redact(body)
-        #expect(n == 0)
-        #expect(out == body)
-    }
-}
-
 @Suite("Classify — ssh command risk")
 struct ClassifyTests {
     @Test("readonly binary → readonly")

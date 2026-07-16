@@ -1,4 +1,4 @@
-# 06: Audit and DLP
+# 06: Audit and result handling
 
 ## Audit log
 
@@ -37,32 +37,38 @@ Activity events include:
 - bounded arguments preview;
 - decision and ladder rule;
 - origin process and code-signing data;
-- result status, byte count, and redaction count;
+- result status and byte count;
 - SSH host-key fingerprint and recording path when applicable.
 
 Session events record admission, observation, exit, revoke, vault lock, and orphan reconciliation after an unclean shutdown. Live sessions remain in memory and are cleared on lock or app exit.
 
-Sallyport-injected secret values are not written to the audit event. Caller-supplied commands and argument previews can still contain sensitive data. Treat a decrypted journal as sensitive.
+Sallyport-injected secret values are not intentionally written to the audit event. Caller-supplied
+commands and argument previews can still contain sensitive data. Treat a decrypted journal as
+sensitive.
 
 `logBodies` is a persisted setting but no current executor or audit path consumes it. Request and response body capture is not implemented.
+
+## Executor results
+
+HTTP and MCP results, errors, and catalog metadata are returned after protocol parsing and within
+their resource limits. Sallyport does not inspect, classify, redact, or otherwise rewrite their
+application content. The target or upstream server is a trusted credential recipient and may return
+credentials or other sensitive data. Sallyport has no credential reveal route and does not
+intentionally add stored credentials to a result, but that is not a non-disclosure guarantee for
+target-controlled content.
+
+Exact byte coincidences are left untouched. This avoids corrupting legitimate results and keeps
+Sallyport out of the role of a content-classification layer.
 
 ## SSH recordings
 
 `sp-ssh` returns an asciicast to the app. The app seals it under a DEK-derived key and writes `~/.sallyport/recordings/*.cast.sealed`. Failure to create the recording denies `ssh.exec`.
 
-The Activity detail can decrypt and save a recording while the vault is unlocked. Before returning the cast, `sp-ssh` redacts fixed credential patterns. It cannot apply the app's exact-value pass because SSH key material never enters the helper. Treat decrypted recordings as sensitive.
-
-## Output redaction
-
-Before an agent receives tool output, Sallyport recursively scans string keys and values. It masks:
-
-- the exact credential values injected for that request;
-- bearer tokens;
-- common GitHub, GitLab, AWS, Stripe, OpenAI, Anthropic, Slack, and Google key formats;
-- JWTs and PEM private-key blocks.
+The Activity detail can decrypt and save a recording while the vault is unlocked. SSH stdout,
+stderr, and recordings are preserved without content inspection. The private key does not enter the
+helper, but commands and remote output can contain credentials or other sensitive data. Treat
+returned output and decrypted recordings as sensitive.
 
 HTTP responses are capped at 8 MiB by default. SSH helper output and MCP frames also have fixed resource limits.
-
-Current DLP does not provide custom regex or JSONPath rules, outbound body scanning, prompt-injection detection, confidence-based blocking, or summarization. Those are roadmap items. Redaction reduces accidental disclosure; it is not byte-level data-flow tracking.
 
 See [08-security-model.md](08-security-model.md) for residual risks and [10-roadmap.md](10-roadmap.md) for planned hardening.

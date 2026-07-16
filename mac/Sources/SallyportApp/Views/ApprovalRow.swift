@@ -102,14 +102,14 @@ struct ApprovalRow: View {
                     ProgressView().controlSize(.small)
                 } else if needsTouchID {
                     if isSession {
-                        Label("Approve agent", systemImage: "touchid").labelStyle(.titleAndIcon)
+                        Label("Allow session", systemImage: "touchid").labelStyle(.titleAndIcon)
                     } else {
                         Label("Approve call", systemImage: "touchid").labelStyle(.titleAndIcon)
                     }
                 } else if isPerCall {
                     Label("Approve call", systemImage: "1.circle").labelStyle(.titleAndIcon)
                 } else if isSession {
-                    Label("Approve agent", systemImage: "person.badge.shield.checkmark").labelStyle(.titleAndIcon)
+                    Label("Allow session", systemImage: "person.badge.shield.checkmark").labelStyle(.titleAndIcon)
                 } else {
                     Text("Approve")
                 }
@@ -127,10 +127,12 @@ struct ApprovalRow: View {
             }
             if isSession || isPerCall { sessionSignatureLine }
             commandBlock
-            if let body = request.action.bodyPreview,
-               request.action.channel != "ssh", !body.isEmpty {
-                Text(verbatim: body).font(Theme.Typography.monoSmall)
-                    .foregroundStyle(.secondary).lineLimit(4)
+            if isPerCall, request.action.tool == "http.request",
+               let body = request.action.bodyPreview, !body.isEmpty {
+                HTTPBodyPreviewView(
+                    preview: body,
+                    originalByteCount: request.action.bodyByteCount ?? body.utf8.count,
+                    truncated: request.action.bodyPreviewTruncated)
             }
             if isSession { sessionNote }
             if isPerCall { perCallNote }
@@ -179,7 +181,7 @@ struct ApprovalRow: View {
     }
 
     private var sessionNote: some View {
-        Text("Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply.")
+        Text(verbatim: ApprovalCopy.sessionDisclosure())
             .font(.caption2).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -229,7 +231,7 @@ struct ApprovalRow: View {
 
     private var approveLabel: LocalizedStringResource {
         if isProcessing { return "Authorizing…" }
-        if isSession { return "Approve agent" }
+        if isSession { return "Allow session" }
         if isPerCall { return "Approve call" }
         return "Approve"
     }

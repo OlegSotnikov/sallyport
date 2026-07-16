@@ -175,7 +175,7 @@ func TestRunPreCanceledContextDoesNotDial(t *testing.T) {
 	_, err := (&Executor{}).run(ctx, "127.0.0.1:1", &ssh.ClientConfig{
 		User:            "test",
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	}, "noop", time.Second, nil)
+	}, "noop", time.Second, nil, nil)
 	if !errors.Is(err, ErrTimeout) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-canceled dial error = %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRunHandshakeHonorsDeadlineAndCancellation(t *testing.T) {
 				_, err := (&Executor{}).run(ctx, ln.Addr().String(), &ssh.ClientConfig{
 					User:            "test",
 					HostKeyCallback: ssh.InsecureIgnoreHostKey(), // peer never reaches host-key exchange
-				}, "noop", tt.timeout, nil)
+				}, "noop", tt.timeout, nil, nil)
 				result <- err
 			}()
 			var peer net.Conn
@@ -262,7 +262,7 @@ func TestRunSessionProtocolFailuresDoNotHang(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			addr, cfg := startProtocolTestServer(t, tt.behavior)
-			rr, err := (&Executor{}).run(context.Background(), addr, cfg, "noop", time.Second, nil)
+			rr, err := (&Executor{}).run(context.Background(), addr, cfg, "noop", time.Second, nil, nil)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("run error = %v, want containing %q", err, tt.wantErr)
@@ -276,6 +276,39 @@ func TestRunSessionProtocolFailuresDoNotHang(t *testing.T) {
 				t.Fatalf("result exit/stdout = %d/%q", rr.exit, rr.stdout.String())
 			}
 		})
+	}
+}
+
+func TestRunAuthenticatedHostKeyCommitFailureClosesBeforeSession(t *testing.T) {
+	srv, err := sshtest.New(func(string) (string, string, int) {
+		return "must not run", "", 0
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	keyPEM, pub, err := sshtest.ClientKeyPEM("commit-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Authorize(pub)
+	signer, err := ssh.ParsePrivateKey(keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &ssh.ClientConfig{
+		User:            "test",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	commitErr := errors.New("concurrent first-contact key won")
+	rr, err := (&Executor{}).run(context.Background(), srv.Addr(), cfg, "must-not-run",
+		time.Second, nil, func() error { return commitErr })
+	if rr != nil || !errors.Is(err, commitErr) || !strings.Contains(err.Error(), "commit authenticated host key") {
+		t.Fatalf("commit failure result = (%v, %v)", rr, err)
+	}
+	if commands := srv.ExecedCommands(); len(commands) != 0 {
+		t.Fatalf("commit failure opened a command session: %v", commands)
 	}
 }
 

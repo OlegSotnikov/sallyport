@@ -4,7 +4,7 @@ import SallyportKit
 /// Authorizes and executes agent actions.
 /// Locked or quarantined vaults deny all actions before reading vault metadata.
 /// Per-call requirements take precedence over session approval. Every action is
-/// recorded before execution, and returned data is checked for secret values.
+/// recorded before execution, and channel output is returned without rewriting.
 public actor Engine {
     private let store: VaultStore
     private let sessions: SessionStore
@@ -172,9 +172,20 @@ public actor Engine {
                                        : "allow"
 
         if !askMode.isEmpty {
+            // A per-call decision covers this specific HTTP action, so disclose
+            // its pre-injection body. A session grant is process admission, not
+            // a second authorization boundary for the triggering action.
+            let bodyPreview = askMode.hasPrefix("per-call")
+                ? Engine.httpBodyDisplayPreview(action)
+                : nil
             let req = EngineApproval(id: Engine.reqID(), mode: askMode, rule: rule,
-                                     reason: Engine.reason(askMode), channel: channel, tool: action.tool,
-                                     summary: Engine.summarize(action, host: host), host: host,
+                                     reason: Engine.reason(askMode), channel: channel,
+                                     tool: Engine.displayTool(action.tool),
+                                     summary: Engine.summarize(action, host: host),
+                                     host: Engine.displayTarget(host),
+                                     bodyPreview: bodyPreview?.text,
+                                     bodyByteCount: bodyPreview?.byteCount,
+                                     bodyPreviewTruncated: bodyPreview?.truncated ?? false,
                                      origin: origin, chain: provenance.chain)
             switch await approver.requestApproval(req).verdict {
             case .approved:
@@ -232,11 +243,10 @@ public actor Engine {
 
         // Execute under the lifecycle captured at the vault gate.
         do {
-            var out = try await execute(action, tool: action.tool, host: host,
+            let out = try await execute(action, tool: action.tool, host: host,
                                         sshHost: sshHost, upstream: upstream)
             // Drop output if the vault lifecycle changed during execution.
             if !(await store.lifecycleIsCurrent(startEpoch, phase: .ready)) {
-                Engine.zeroize(&out.injected)
                 return await record(id, channel, action, host, "deny", "vault.locked", true,
                                     bytesOut: out.bytesOut, recording: out.recording,
                                     hostKeyFp: out.output["host_key_fingerprint"]?.stringValue ?? "",
@@ -245,23 +255,32 @@ public actor Engine {
                                                     "The vault locked while the call was running.",
                                                     rule: "vault.locked"))
             }
-            // Redact exact injected values and generic credential patterns.
-            let (scrubbed, redactions) = Engine.redactOutput(out.output, injected: out.injected)
-            Engine.zeroize(&out.injected)
-            var result = InvokeResult(ok: true, output: scrubbed, rule: rule, decision: decision)
+            var result = InvokeResult(ok: true, output: out.output, rule: rule, decision: decision)
             if !out.recording.isEmpty { result.output["recording"] = .string(out.recording) }
             return await record(id, channel, action, host, decision, rule, false,
-                                bytesOut: out.bytesOut, dlpRedactions: redactions,
-                                recording: out.recording,
+                                bytesOut: out.bytesOut, recording: out.recording,
                                 hostKeyFp: out.output["host_key_fingerprint"]?.stringValue ?? "",
                                 origin: origin, chain: provenance.chain, result: result)
         } catch let e as BlockedError {
             return await record(id, channel, action, host, decision, rule, true, origin: origin, chain: provenance.chain,
-                                result: .denied("SALLYPORT_BLOCKED", Engine.scrubError(e.description), rule: rule))
+                                result: .denied("SALLYPORT_BLOCKED", e.description, rule: rule))
+        } catch let e as SSHExecutionError {
+            // Authentication and host-key failures can still produce security
+            // evidence. Carry it into the single completion row before returning
+            // the helper diagnostic to the caller.
+            return await record(
+                id, channel, action, host, decision, rule, true,
+                bytesOut: e.bytesOut, recording: e.recording,
+                hostKeyFp: e.hostKeyFingerprint,
+                origin: origin, chain: provenance.chain,
+                result: InvokeResult(ok: false, errorCode: "SALLYPORT_UPSTREAM_DOWN",
+                                     reason: e.description,
+                                     rule: rule, decision: decision))
         } catch {
-            // Redact generic credential patterns from returned errors.
             return await record(id, channel, action, host, decision, rule, true, origin: origin, chain: provenance.chain,
-                                result: InvokeResult(ok: false, errorCode: "SALLYPORT_UPSTREAM_DOWN", reason: Engine.scrubError("\(error)"), rule: rule, decision: decision))
+                                result: InvokeResult(ok: false, errorCode: "SALLYPORT_UPSTREAM_DOWN",
+                                                     reason: "\(error)", rule: rule,
+                                                     decision: decision))
         }
     }
 
@@ -345,17 +364,17 @@ public actor Engine {
             guard let manager = upstreamManager else {
                 throw EngineError.notConfigured("the upstream MCP channel is unavailable")
             }
-            let (output, injected) = try await manager.call(entry: upstream.entry,
-                                                            tool: upstream.tool, args: action.args)
-            return ExecOutput(output: output, injected: injected)
+            let output = try await manager.call(entry: upstream.entry,
+                                                tool: upstream.tool, args: action.args)
+            return ExecOutput(output: output)
         }
         switch tool {
         case "http.request":
             // Inject only when both URL parsers resolve the same host.
             let (boundHost, _) = Engine.hostPath(action.args["url"])
-            let cred = try await preResolveHTTP(action)
-            let resolver: CredResolver = { execHost, _ in
-                execHost.lowercased() == boundHost.lowercased() ? cred : nil
+            let resolver: CredResolver = { execHost, execPath in
+                guard execHost.lowercased() == boundHost.lowercased() else { return nil }
+                return try await self.store.resolve(host: execHost, path: execPath)
             }
             return try await http.execute(action, resolve: resolver)
         case "ssh.exec":
@@ -373,11 +392,6 @@ public actor Engine {
         default:
             throw EngineError.notConfigured("tool \(tool) not executable")
         }
-    }
-
-    private func preResolveHTTP(_ action: Action) async throws -> Cred? {
-        let (h, p) = Engine.hostPath(action.args["url"])
-        return try await store.resolve(host: h, path: p)
     }
 
     // MARK: - Audit + activity
@@ -425,58 +439,13 @@ public actor Engine {
         return s
     }
 
-    /// Redacts exact secrets and generic credential patterns from tool output.
-    static func redactOutput(_ output: [String: JSONValue], injected: [Data]) -> ([String: JSONValue], Int) {
-        var total = 0
-        // Scrub exact values before generic patterns.
-        func scrubString(_ s: String) -> String {
-            var data = Data(s.utf8)
-            if !injected.isEmpty {
-                let (r, n) = DLP.redactWith(data, secrets: injected)
-                data = r; total += n
-            }
-            let (r2, n2) = DLP.redact(data)
-            total += n2
-            return String(decoding: r2, as: UTF8.self)
-        }
-        // Redact object keys and preserve values after a key collision.
-        func scrub(_ v: JSONValue) -> JSONValue {
-            switch v {
-            case .string(let s): return .string(scrubString(s))
-            case .array(let a): return .array(a.map(scrub))
-            case .object(let o):
-                var out: [String: JSONValue] = [:]
-                for (k, val) in o {
-                    var key = scrubString(k)
-                    if out[key] != nil { key += "~\(out.count)" }
-                    out[key] = scrub(val)
-                }
-                return .object(out)
-            default: return v
-            }
-        }
-        return (scrub(.object(output)).objectValue ?? output, total)
-    }
-
-    /// Redacts generic credential patterns from an error string.
-    static func scrubError(_ text: String) -> String {
-        let (out, _) = DLP.redact(Data(text.utf8))
-        return String(decoding: out, as: UTF8.self)
-    }
-
-    /// Wipes injected secret copies.
-    static func zeroize(_ secrets: inout [Data]) {
-        for i in secrets.indices where !secrets[i].isEmpty {
-            secrets[i].resetBytes(in: 0..<secrets[i].count)
-        }
-        secrets.removeAll()
-    }
-
     /// Records intent before execution. This row is not sent to the live feed.
     private func recordIntent(_ identity: String, _ channel: String, _ action: Action, _ target: String,
                               _ decision: String, _ rule: String,
                               origin: Origin, chain: [Hop]) -> Bool {
-        var ev = AuditEvent(identity: identity, channel: channel, tool: action.tool, target: target,
+        var ev = AuditEvent(identity: identity, channel: channel,
+                            tool: Engine.displayTool(action.tool),
+                            target: Engine.displayTarget(target),
                             argsPreview: Engine.preview(action), decision: decision + ".start", rule: rule,
                             isError: false)
         ev.session = SessionStore.sessionKey(origin) ?? ""
@@ -489,12 +458,14 @@ public actor Engine {
     @discardableResult
     private func record(_ identity: String, _ channel: String, _ action: Action, _ target: String,
                         _ decision: String, _ rule: String, _ isError: Bool,
-                        bytesOut: Int = 0, dlpRedactions: Int = 0, recording: String = "",
+                        bytesOut: Int = 0, recording: String = "",
                         hostKeyFp: String = "",
                         origin: Origin, chain: [Hop], result: InvokeResult) async -> InvokeResult {
-        var ev = AuditEvent(identity: identity, channel: channel, tool: action.tool, target: target,
+        var ev = AuditEvent(identity: identity, channel: channel,
+                            tool: Engine.displayTool(action.tool),
+                            target: Engine.displayTarget(target),
                             argsPreview: Engine.preview(action), decision: decision, rule: rule,
-                            isError: isError, bytesOut: bytesOut, dlpRedactions: dlpRedactions,
+                            isError: isError, bytesOut: bytesOut,
                             recording: recording, hostKeyFp: hostKeyFp)
         ev.session = SessionStore.sessionKey(origin) ?? ""
         ev.origin = AuditEvent.Origin(name: origin.name, path: origin.path, app: origin.appName,

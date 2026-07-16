@@ -82,7 +82,7 @@ public struct Action: Sendable {
     public init(tool: String, args: [String: JSONValue]) { self.tool = tool; self.args = args }
 }
 
-/// Result of an invoked action. It must not contain secret values.
+/// Result of an invoked action. Output is returned faithfully from the channel.
 public struct InvokeResult: Sendable {
     public var ok: Bool
     public var output: [String: JSONValue]
@@ -104,25 +104,23 @@ public struct InvokeResult: Sendable {
 // MARK: - Executor contract
 
 /// An egress executor (HTTP, SSH, upstream MCP). Given an action and a credential
-/// resolver, it performs the side effect and returns redacted output + the raw
-/// injected values (so the engine can DLP-scrub any verbatim echo, then zeroize).
+/// resolver, it performs the side effect and returns the channel output.
 public protocol ChannelExecutor: Sendable {
     func execute(_ action: Action, resolve: CredResolver) async throws -> ExecOutput
 }
 
 /// Resolves the credential bound to a target, materializing the secret at point of
 /// use. Returns nil when nothing is bound (the call proceeds unauthenticated).
-public typealias CredResolver = @Sendable (_ host: String, _ path: String) throws -> Cred?
+public typealias CredResolver = @Sendable (_ host: String, _ path: String) async throws -> Cred?
 
 /// An executor's outputs, audited uniformly.
 public struct ExecOutput: Sendable {
     public var output: [String: JSONValue]
     public var bytesOut: Int
-    public var injected: [Data]         // Exact injected values for redaction and zeroization.
     public var recording: String
     public init(output: [String: JSONValue] = [:], bytesOut: Int = 0,
-                injected: [Data] = [], recording: String = "") {
+                recording: String = "") {
         self.output = output; self.bytesOut = bytesOut
-        self.injected = injected; self.recording = recording
+        self.recording = recording
     }
 }

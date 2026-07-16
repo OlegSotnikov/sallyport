@@ -3,6 +3,18 @@ import Security
 import SallyportKit
 import Darwin
 
+/// Preserves SSH failure evidence across the throwing executor boundary so the
+/// Engine can write the fingerprint and sealed recording into the completion
+/// audit row instead of losing them in a generic error translation.
+struct SSHExecutionError: Error, Sendable, CustomStringConvertible {
+    let message: String
+    let bytesOut: Int
+    let recording: String
+    let hostKeyFingerprint: String
+
+    var description: String { message }
+}
+
 
 /// Tracks in-flight `ssh.exec` children. Lock kills each process group and revokes
 /// its signing agent.
@@ -188,6 +200,8 @@ public struct SSHSpawner: SSHExecuting {
         let bytesOut: Int
         let hostKeyFingerprint: String
         let castB64: String
+        let truncated: Bool
+        let helperError: String
     }
 
     struct BoundedReadResult {
@@ -248,11 +262,14 @@ public struct SSHSpawner: SSHExecuting {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw EngineError.notConfigured("sp-ssh: unreadable response")
         }
+        let helperError: String
         if let rawError = obj["error"] {
             guard let error = rawError as? String else {
                 throw EngineError.notConfigured("sp-ssh: unreadable response")
             }
-            if !error.isEmpty { throw EngineError.notConfigured(error) }
+            helperError = error
+        } else {
+            helperError = ""
         }
 
         let truncated: Bool
@@ -264,14 +281,6 @@ public struct SSHSpawner: SSHExecuting {
         } else {
             truncated = false // backward-compatible with pre-flag helpers
         }
-        guard !truncated else {
-            // stdout/stderr and returnCast share the helper's retention budget.
-            // Returning either as though complete would make command results and
-            // the security recording disagree with what actually happened.
-            throw EngineError.notConfigured(
-                "sp-ssh: command output exceeded the retention limit; output and session recording are incomplete")
-        }
-
         guard let stdoutB64 = obj["stdout"] as? String,
               let stderrB64 = obj["stderr"] as? String,
               let stdout = Data(base64Encoded: stdoutB64),
@@ -293,7 +302,8 @@ public struct SSHSpawner: SSHExecuting {
         }
         return DecodedExecResponse(stdout: stdout, stderr: stderr,
                                    exitCode: exitCode, bytesOut: bytesOut,
-                                   hostKeyFingerprint: fingerprint, castB64: castB64)
+                                   hostKeyFingerprint: fingerprint, castB64: castB64,
+                                   truncated: truncated, helperError: helperError)
     }
 
     private static func setCloexec(_ fd: Int32) {
@@ -485,37 +495,63 @@ public struct SSHSpawner: SSHExecuting {
         }
 
         let response = try SSHSpawner.decodeExecResponse(helperRead.data)
-        // Redact helper output before returning it.
-        let rawOut = response.stdout
-        let rawErr = response.stderr
-        let (so, _) = DLP.redact(rawOut)
-        let (se, _) = DLP.redact(rawErr)
-        let exit = response.exitCode
         let fp = response.hostKeyFingerprint
 
-        // Treat a requested recording that cannot be sealed or written as an error.
+        // Preserve any recording before translating the helper's error. Failed
+        // authentication still produces a cast and a host-key fingerprint; both
+        // belong in the completion audit row even though no command ran.
         var recording = ""
         if recordsSealed, let seal {
-            guard let cast = Data(base64Encoded: response.castB64), !cast.isEmpty else {
-                throw EngineError.notConfigured("sp-ssh: no session recording returned")
-            }
-            // Add a random suffix to avoid same-millisecond filename collisions.
-            let stamp = Self.recordingTimestampMilliseconds(
-                secondsSince1970: Date().timeIntervalSince1970)
-            let filename = "ssh-\(stamp)-\(UUID().uuidString.prefix(8)).cast.sealed"
-            let sealed = try seal(cast, filename)
-            do {
-                try FileManager.default.createDirectory(
-                    atPath: recordDir, withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o700])
-                let path = (recordDir as NSString).appendingPathComponent(filename)
-                try sealed.write(to: URL(fileURLWithPath: path), options: [.atomic])
-                try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
-                recording = path
-            } catch {
-                throw EngineError.notConfigured("could not write sealed recording: \(error.localizedDescription)")
+            if let cast = Data(base64Encoded: response.castB64), !cast.isEmpty {
+                do {
+                    // Add a random suffix to avoid same-millisecond filename collisions.
+                    let stamp = Self.recordingTimestampMilliseconds(
+                        secondsSince1970: Date().timeIntervalSince1970)
+                    let filename = "ssh-\(stamp)-\(UUID().uuidString.prefix(8)).cast.sealed"
+                    let sealed = try seal(cast, filename)
+                    try FileManager.default.createDirectory(
+                        atPath: recordDir, withIntermediateDirectories: true,
+                        attributes: [.posixPermissions: 0o700])
+                    let path = (recordDir as NSString).appendingPathComponent(filename)
+                    try sealed.write(to: URL(fileURLWithPath: path), options: [.atomic])
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+                    recording = path
+                } catch {
+                    let preservationError = "could not preserve sealed SSH recording: \(error.localizedDescription)"
+                    let message = response.helperError.isEmpty
+                        ? preservationError
+                        : "\(response.helperError); \(preservationError)"
+                    throw SSHExecutionError(message: message, bytesOut: response.bytesOut,
+                                            recording: "", hostKeyFingerprint: fp)
+                }
+            } else if response.helperError.isEmpty && !response.truncated {
+                // Successful calls require their requested security recording.
+                throw SSHExecutionError(message: "sp-ssh: no session recording returned",
+                                        bytesOut: response.bytesOut, recording: "",
+                                        hostKeyFingerprint: fp)
             }
         }
+
+        if !response.helperError.isEmpty {
+            throw SSHExecutionError(message: response.helperError, bytesOut: response.bytesOut,
+                                    recording: recording, hostKeyFingerprint: fp)
+        }
+        if response.truncated {
+            // stdout/stderr and returnCast share the helper's retention budget.
+            // The partial cast is retained as evidence, but incomplete output is
+            // never returned to the agent as though the command succeeded.
+            throw SSHExecutionError(
+                message: "sp-ssh: command output exceeded the retention limit; output and session recording are incomplete",
+                bytesOut: response.bytesOut, recording: recording,
+                hostKeyFingerprint: fp)
+        }
+
+        // SSH authentication uses signatures; no vault credential bytes are
+        // injected into command output. Do not rewrite the remote program's
+        // output based on guesses about credential-shaped strings.
+        let so = response.stdout
+        let se = response.stderr
+        let exit = response.exitCode
 
         return ExecOutput(output: [
             "stdout": .string(String(decoding: so, as: UTF8.self)),

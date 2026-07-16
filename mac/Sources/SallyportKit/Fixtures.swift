@@ -63,9 +63,11 @@ public enum Fixtures {
             argsPreview: .object(["method": .string("POST"),
                                   "path": .string("/client/v4/zones/abc/dns_records")]),
             bodyPreview: #"{"type":"A","name":"gse.kz","content":"1.2.3.4"}"#,
+            bodyByteCount: 48,
             dangerTokens: ["POST"]),
         why: WhyDescriptor(rule: "http-mutating", reason: "bound credential: cloudflare"),
-        provenance: provenanceIntact)
+        provenance: provenanceIntact,
+        mode: "per-call")
 
     /// Session approval from a signed caller.
     public static let sessionClaude = ApprovalRequest(

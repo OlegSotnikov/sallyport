@@ -527,6 +527,29 @@ struct BindMatchTests {
         #expect(!VaultStore.pathMatch(pattern: "/api/v4/*", path: "/other"))
     }
 
+    @Test("pathMatch rejects raw and percent-decoded dot segments")
+    func pathDotSegments() throws {
+        let rawPaths = [
+            "/api/v4/./projects",
+            "/api/v4/../admin",
+        ]
+        for path in rawPaths {
+            #expect(!VaultStore.pathMatch(pattern: "/api/v4/*", path: path))
+        }
+
+        let encodedURLs = [
+            "https://api.example.test/api/v4/%2e/projects",
+            "https://api.example.test/api/v4/%2E%2E/admin",
+            "https://api.example.test/api/v4/.%2e/admin",
+            "https://api.example.test/api/v4/%2e./admin",
+        ]
+        for rawURL in encodedURLs {
+            let url = try #require(URL(string: rawURL))
+            let decodedPath = url.path(percentEncoded: false)
+            #expect(!VaultStore.pathMatch(pattern: "/api/v4/*", path: decodedPath))
+        }
+    }
+
     @Test("bindMatches: empty bindPaths means any path on a matched host")
     func anyPathOnHost() {
         let m = SecretMeta(name: "s", kind: "bearer", bindHosts: ["h.example"])

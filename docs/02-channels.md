@@ -42,12 +42,15 @@ Before the request, the network guard resolves the destination:
 - private, loopback, and unique-local addresses require an explicit credential binding;
 - public addresses are allowed.
 
-Validation and connection currently resolve DNS separately. A change between those resolutions can
-bypass the address check. Pinning the validated address through connection is roadmap work.
+The validated A/AAAA snapshot is pinned for that logical request. URLSession connects through a
+request-scoped, capability-authenticated loopback tunnel that can dial only numeric members of the
+snapshot, while TLS still verifies and sends SNI for the original hostname. A later request resolves
+and validates a fresh snapshot; retries inside the current request cannot silently re-resolve.
 
 Responses are capped at 8 MiB by default. Sallyport returns parsed JSON when possible, otherwise a
-body string. It redacts exact injected values and fixed credential patterns before returning output
-to the agent. Request and response body capture is not implemented.
+body string. It does not inspect, classify, redact, or otherwise rewrite response and error content.
+The target is a trusted credential recipient and its response may contain sensitive data, including
+values it received in the request. Request and response body capture is not implemented.
 
 ## SSH
 
@@ -68,15 +71,16 @@ legacy tests.
 
 Host-key policies are:
 
-- `accept-new`: store the first key in Sallyport's `known_hosts`; reject later changes;
+- `accept-new`: stage the first key during key exchange, store it in Sallyport's
+  `known_hosts` only after client authentication succeeds, and reject later changes;
 - `strict`: require an existing matching key.
 
 New TOFU fingerprints are included in the audit data. A shared 8 MiB retention budget bounds
 stdout, stderr, and recording data while the helper continues draining the remote process.
 
-The helper applies fixed-pattern redaction before stdout, stderr, or recording bytes leave it. The
-app seals recordings under a DEK-derived key. Decrypted recordings may still contain sensitive
-commands or output.
+SSH stdout, stderr, and recording bytes are preserved without content inspection. The app seals
+recordings under a DEK-derived key. Returned output and decrypted recordings may contain sensitive
+commands, output, or credentials.
 
 Sallyport does not expose a user-facing `SSH_AUTH_SOCK`. SSH-agent compatibility, git credential
 integration, `ssh.copy`, and native Secure Enclave SSH-key generation are roadmap work.
@@ -84,7 +88,9 @@ integration, `ssh.copy`, and native Secure Enclave SSH-key generation are roadma
 ## Upstream MCP
 
 Sallyport can proxy third-party MCP servers. Discovered tools appear as `<server>.<tool>` and pass
-through the same vault, approval, session, audit, and redaction checks as built-in tools.
+through the same vault, approval, session, and audit checks as built-in tools. Agent-visible call
+results, errors, and catalog metadata are returned without content inspection or rewriting. Treat
+the upstream server as a trusted credential recipient; its output may contain sensitive data.
 
 ### Local stdio
 
@@ -118,6 +124,10 @@ initial `tools/list`. A caller that already knows `<server>.<tool>` can invoke i
 approval path. A successful remote HTTP call can populate the catalog; one-shot stdio calls do not.
 Automatic discovery for these upstreams is not implemented.
 
+Authenticated MCP initialization and catalog metadata enter the agent-visible catalog without
+content inspection or rewriting. Tool names, descriptions, and schemas remain arbitrary
+upstream-controlled content and may include sensitive data supplied by the upstream.
+
 ## Credential requests
 
 `sallyport.request_credential` lets an agent ask the user to add a credential. It follows the normal
@@ -129,10 +139,10 @@ the credential value.
 
 | Channel | Credential use | Main boundary |
 |---|---|---|
-| HTTP | app attaches host-bound authentication | DNS validation is not pinned through connect |
+| HTTP | app attaches host-bound authentication | validated DNS snapshot is pinned through connect |
 | SSH | app signs for the private `sp-ssh` channel | decrypted output and recordings may be sensitive |
 | Local MCP | app injects values into a child environment | the child and same-user inspection can expose them |
 | Remote MCP | app attaches an API key or OAuth token | the remote server receives the authorized credential |
 
 See [04-vault.md](04-vault.md) for key storage, [05-approvals.md](05-approvals.md) for confirmation
-scope, and [06-audit-dlp.md](06-audit-dlp.md) for audit and redaction behavior.
+scope, and [06-audit.md](06-audit.md) for audit, result handling, and recordings.

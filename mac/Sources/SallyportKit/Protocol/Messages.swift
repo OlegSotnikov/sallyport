@@ -11,23 +11,30 @@ public struct ActionDescriptor: Sendable, Hashable, Codable {
     public var host: String?
     public var argsPreview: JSONValue?
     public var bodyPreview: String?
+    /// Original request-body size in UTF-8 bytes. The preview may be shorter.
+    public var bodyByteCount: Int?
+    public var bodyPreviewTruncated: Bool
     public var dangerTokens: [String]
 
     public init(channel: String, tool: String, summary: String,
                 host: String? = nil, argsPreview: JSONValue? = nil,
-                bodyPreview: String? = nil, dangerTokens: [String] = []) {
+                bodyPreview: String? = nil, bodyByteCount: Int? = nil,
+                bodyPreviewTruncated: Bool = false, dangerTokens: [String] = []) {
         self.channel = channel
         self.tool = tool
         self.summary = summary
         self.host = host
         self.argsPreview = argsPreview
         self.bodyPreview = bodyPreview
+        self.bodyByteCount = bodyByteCount
+        self.bodyPreviewTruncated = bodyPreviewTruncated
         self.dangerTokens = dangerTokens
     }
 
     // dangerTokens is optional on the wire; default to [] when absent.
     private enum CodingKeys: String, CodingKey {
-        case channel, tool, summary, host, argsPreview, bodyPreview, dangerTokens
+        case channel, tool, summary, host, argsPreview, bodyPreview, bodyByteCount
+        case bodyPreviewTruncated, dangerTokens
     }
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -37,6 +44,8 @@ public struct ActionDescriptor: Sendable, Hashable, Codable {
         host = try c.decodeIfPresent(String.self, forKey: .host)
         argsPreview = try c.decodeIfPresent(JSONValue.self, forKey: .argsPreview)
         bodyPreview = try c.decodeIfPresent(String.self, forKey: .bodyPreview)
+        bodyByteCount = try c.decodeIfPresent(Int.self, forKey: .bodyByteCount)
+        bodyPreviewTruncated = try c.decodeIfPresent(Bool.self, forKey: .bodyPreviewTruncated) ?? false
         dangerTokens = try c.decodeIfPresent([String].self, forKey: .dangerTokens) ?? []
     }
 }

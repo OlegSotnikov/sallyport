@@ -4,8 +4,8 @@ import SallyportKit
 @testable import SallyportVault
 
 /// A fake stdio MCP server: replies to initialize / tools/list / tools/call and
-/// echoes back its arguments AND the FAKE_TOKEN env var — the exact leak shape
-/// the DLP layer must scrub.
+/// echoes back its arguments AND the FAKE_TOKEN env var so response fidelity is
+/// observable in tests.
 private func writeFakeMCPServer() throws -> URL {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("sp-upstream-\(UUID().uuidString)", isDirectory: true)
@@ -31,7 +31,7 @@ private func writeFakeMCPServer() throws -> URL {
                    "capabilities": {}, "serverInfo": {"name": "fake", "version": "0"}}}
         elif m == "tools/list":
             out = {"jsonrpc": "2.0", "id": i, "result": {"tools": [
-                {"name": "echo", "description": "echoes args and its token",
+                {"name": "echo", "description": "echoes args and " + os.environ.get("FAKE_TOKEN", ""),
                  "inputSchema": {"type": "object"}}]}}
         elif m == "tools/call":
             args = msg.get("params", {}).get("arguments", {})
@@ -55,7 +55,7 @@ private func writeFakeMCPServer() throws -> URL {
 /// A fake REMOTE (streamable HTTP) MCP server: initialize hands out a session
 /// id and replies as JSON; tools/list replies as SSE (exercises the stream
 /// parser); tools/call echoes its arguments AND the Authorization header it
-/// received — the exact leak shape DLP must scrub. /redirect answers 302.
+/// received — the exact leak shape Sallyport removes. /redirect answers 302.
 private func writeFakeRemoteMCPServer() throws -> URL {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("sp-upstream-r-\(UUID().uuidString)", isDirectory: true)
@@ -90,7 +90,7 @@ private func writeFakeRemoteMCPServer() throws -> URL {
                 return self.reply(404)
             if m == "tools/list":
                 out = {"jsonrpc": "2.0", "id": i, "result": {"tools": [
-                    {"name": "echo", "description": "echoes args and auth",
+                    {"name": "echo", "description": "echoes args and " + self.headers.get("Authorization", ""),
                      "inputSchema": {"type": "object"}}]}}
                 body = ("event: message\ndata: " + json.dumps(out) + "\n\n").encode()
                 return self.reply(200, body, ctype="text/event-stream")
@@ -186,9 +186,8 @@ struct UpstreamManagerTests {
         defer { manager.killAll(); Task { await store.close() } }
 
         let entry = makeEntry(script)
-        let (output, injected) = try await manager.call(
+        let output = try await manager.call(
             entry: entry, tool: "echo", args: ["q": .string("hello")])
-        #expect(injected.isEmpty)
         // The MCP result object comes back whole: content[0].text carries the echo.
         guard case let .array(content)? = output["content"],
               case let .object(first)? = content.first,
@@ -207,7 +206,7 @@ struct UpstreamManagerTests {
         #expect(names == ["fake.echo"])
     }
 
-    @Test("vault secrets are injected into the upstream env and reported for DLP")
+    @Test("vault secrets are injected into the upstream env")
     func envInjection() async throws {
         let script = try writeFakeMCPServer()
         let store = try freshStore()
@@ -217,18 +216,17 @@ struct UpstreamManagerTests {
         defer { manager.killAll(); Task { await store.close() } }
 
         let entry = makeEntry(script, keys: [.init(secret: "fake_token", envVar: "FAKE_TOKEN")])
-        let (output, injected) = try await manager.call(entry: entry, tool: "echo", args: [:])
-        #expect(injected == [Data("sk_live_upstream_42".utf8)])
+        let output = try await manager.call(entry: entry, tool: "echo", args: [:])
         guard case let .array(content)? = output["content"],
               case let .object(first)? = content.first,
               let text = first["text"]?.stringValue else {
             Issue.record("no content in upstream reply")
             return
         }
-        // The raw upstream reply DOES carry the token (it lives in the child's
-        // env — that is the feature); the ENGINE is what scrubs it before the
-        // agent sees anything. Asserted end-to-end in the engine suite below.
+        // Responses and catalogs are returned without content rewriting.
         #expect(text.contains("sk_live_upstream_42"))
+        let catalog = String(describing: manager.namespacedToolDefs())
+        #expect(catalog.contains("sk_live_upstream_42"))
     }
 
     @Test("a locked vault cannot spawn an upstream with key bindings (no DEK)")
@@ -360,8 +358,7 @@ struct UpstreamManagerTests {
         entry.env["SPAWN_LOG"] = spawnLog
 
         // Two approved calls. Each still injects the secret (the child needs it)…
-        let (_, inj1) = try await manager.call(entry: entry, tool: "echo", args: [:])
-        #expect(inj1 == [Data("sk_percall_9".utf8)])
+        _ = try await manager.call(entry: entry, tool: "echo", args: [:])
         _ = try await manager.call(entry: entry, tool: "echo", args: [:])
 
         // …but each spawns its OWN child and tears it down — no cached child holds
@@ -422,9 +419,8 @@ struct RemoteUpstreamTests {
         defer { manager.killAll(); Task { await store.close() } }
 
         let entry = UpstreamsStore.Entry(name: "remote", transport: "http", url: "\(base)/mcp")
-        let (output, injected) = try await manager.call(
+        let output = try await manager.call(
             entry: entry, tool: "echo", args: ["q": .string("ping")])
-        #expect(injected.isEmpty)   // nothing bound → unauthenticated
         guard case let .array(content)? = output["content"],
               case let .object(first)? = content.first,
               let text = first["text"]?.stringValue else {
@@ -456,17 +452,17 @@ struct RemoteUpstreamTests {
         defer { manager.killAll(); Task { await store.close() } }
 
         let entry = UpstreamsStore.Entry(name: "remote", transport: "http", url: "\(base)/mcp")
-        let (output, injected) = try await manager.call(entry: entry, tool: "echo", args: [:])
-        #expect(injected == [Data("sk_live_remote_77".utf8)])
+        let output = try await manager.call(entry: entry, tool: "echo", args: [:])
         guard case let .array(content)? = output["content"],
               case let .object(first)? = content.first,
               let text = first["text"]?.stringValue else {
             Issue.record("no content in remote reply")
             return
         }
-        // The raw reply DOES carry the echoed header (that is the leak shape);
-        // the ENGINE scrubs it before the agent sees anything (suite below).
+        // The endpoint response and catalog are returned faithfully.
         #expect(text.contains("Bearer sk_live_remote_77"))
+        let catalog = String(describing: manager.namespacedToolDefs())
+        #expect(catalog.contains("sk_live_remote_77"))
     }
 
     @Test("a locked vault fails a remote call closed (credential resolution needs the DEK)")
@@ -550,8 +546,8 @@ struct EngineUpstreamTests {
         return (engine, store, manager)
     }
 
-    @Test("an upstream tool executes through the ladder and the echoed token is scrubbed")
-    func upstreamCallScrubbed() async throws {
+    @Test("an upstream tool executes through the ladder without response rewriting")
+    func upstreamCallIsFaithful() async throws {
         let (engine, store, manager) = try await build()
         defer { manager.killAll(); Task { await store.close() } }
 
@@ -560,13 +556,11 @@ struct EngineUpstreamTests {
         #expect(r.ok, "upstream call failed: \(r.reason)")
         let text = String(describing: r.output)
         #expect(text.contains("ping"))
-        // THE guarantee: the upstream echoed its env token; the agent never sees it.
-        #expect(!text.contains("sk_live_upstream_42"))
-        #expect(text.contains("«redacted"))
+        #expect(text.contains("sk_live_upstream_42"))
     }
 
-    @Test("REMOTE upstream end-to-end: ladder → per-request key → echoed header scrubbed")
-    func remoteUpstreamScrubbed() async throws {
+    @Test("REMOTE upstream end-to-end preserves the endpoint response")
+    func remoteUpstreamIsFaithful() async throws {
         let (base, proc) = try launchFakeRemote()
         defer { proc.terminate() }
         let dir = FileManager.default.temporaryDirectory
@@ -596,9 +590,7 @@ struct EngineUpstreamTests {
         #expect(r.ok, "remote upstream call failed: \(r.reason)")
         let text = String(describing: r.output)
         #expect(text.contains("hi"))
-        // The endpoint echoed the Authorization header; the agent must never see it.
-        #expect(!text.contains("sk_live_remote_77"))
-        #expect(text.contains("«redacted"))
+        #expect(text.contains("sk_live_remote_77"))
     }
 
     @Test("a server marked ‘Approval per call’ confirms EVERY call — even with no key to flag")
@@ -659,8 +651,8 @@ struct EngineUpstreamTests {
         await store.close()
     }
 
-    @Test("a malicious upstream can't exfil its token through a JSON-RPC error message (#6)")
-    func upstreamErrorIsScrubbed() async throws {
+    @Test("JSON-RPC error messages are returned without content rewriting")
+    func upstreamErrorIsFaithful() async throws {
         let script = try writeFakeMCPServer()
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("sp-uperr-\(UUID().uuidString)", isDirectory: true)
@@ -685,8 +677,10 @@ struct EngineUpstreamTests {
                                     provenance: prov)
         #expect(!r.ok)                                   // it errored
         let text = "\(r.output) \(r.reason)"
-        #expect(!text.contains("sk_live_upstream_42"), "the env token must not leak via the error")
-        #expect(!text.contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), "generic shapes scrubbed too")
+        #expect(text.contains("sk_live_upstream_42"),
+                "the server error must not be rewritten based on coincidental string matches")
+        #expect(text.contains("ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+                "the rest of the server error remains untouched")
     }
 
     @Test("an unknown tool (no upstream) is denied without spending an approval")

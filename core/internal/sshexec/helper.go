@@ -9,7 +9,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/sallyport/sallyport/internal/dlp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -42,12 +41,11 @@ type HelperRequest struct {
 	PrivateKeyB64 string `json:"privateKeyB64,omitempty"`
 }
 
-// HelperResponse is written to stdout. Exec output and recordings have the
-// helper's fixed-pattern redaction applied. The app adds exact-value redaction
-// to stdout and stderr.
+// HelperResponse is written to stdout. Exec output and recordings preserve the
+// retained remote bytes without credential-pattern filtering.
 type HelperResponse struct {
-	Stdout     string `json:"stdout"` // base64 stdout after fixed-pattern redaction
-	Stderr     string `json:"stderr"` // base64 stderr after fixed-pattern redaction
+	Stdout     string `json:"stdout"` // base64 retained stdout
+	Stderr     string `json:"stderr"` // base64 retained stderr
 	ExitCode   int    `json:"exitCode"`
 	BytesOut   int    `json:"bytesOut"`
 	Truncated  bool   `json:"truncated,omitempty"`
@@ -130,10 +128,7 @@ func RunHelper(r io.Reader, w io.Writer) error {
 	opts := Opts{
 		Timeout:    time.Duration(req.TimeoutS) * time.Second,
 		RecordPath: req.RecordPath,
-		// Apply fixed-pattern redaction before output and recording bytes leave
-		// the helper. The app applies its exact-value pass to stdout and stderr.
-		Redactor: dlp.Redact,
-		Signer:   agentSig, // nil on the legacy path; the executor resolves the key
+		Signer:     agentSig, // nil on the legacy path; the executor resolves the key
 	}
 	if req.ReturnCast {
 		castBuf = &bytes.Buffer{}

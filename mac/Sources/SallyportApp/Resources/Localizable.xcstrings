@@ -280,6 +280,57 @@
       },
       "comment": "Tool name followed by an empty-arguments summary"
     },
+    "Preview truncated · %@ total": {
+      "localizations": {
+        "en": {
+          "stringUnit": { "state": "translated", "value": "Preview truncated · %@ total" }
+        },
+        "de": {
+          "stringUnit": { "state": "translated", "value": "Vorschau gekürzt · insgesamt %@" }
+        },
+        "es": {
+          "stringUnit": { "state": "translated", "value": "Vista previa truncada · %@ en total" }
+        },
+        "fr": {
+          "stringUnit": { "state": "translated", "value": "Aperçu tronqué · %@ au total" }
+        },
+        "pt-BR": {
+          "stringUnit": { "state": "translated", "value": "Prévia truncada · %@ no total" }
+        },
+        "ru": {
+          "stringUnit": { "state": "translated", "value": "Предпросмотр обрезан · всего %@" }
+        },
+        "zh-Hans": {
+          "stringUnit": { "state": "translated", "value": "预览已截断 · 共 %@" }
+        }
+      },
+      "comment": "HTTP approval body preview metadata; byte count is external data"
+    },
+    "Request body": {
+      "localizations": {
+        "en": {
+          "stringUnit": { "state": "translated", "value": "Request body" }
+        },
+        "de": {
+          "stringUnit": { "state": "translated", "value": "Anfragetext" }
+        },
+        "es": {
+          "stringUnit": { "state": "translated", "value": "Cuerpo de la solicitud" }
+        },
+        "fr": {
+          "stringUnit": { "state": "translated", "value": "Corps de la requête" }
+        },
+        "pt-BR": {
+          "stringUnit": { "state": "translated", "value": "Corpo da solicitação" }
+        },
+        "ru": {
+          "stringUnit": { "state": "translated", "value": "Тело запроса" }
+        },
+        "zh-Hans": {
+          "stringUnit": { "state": "translated", "value": "请求正文" }
+        }
+      }
+    },
     "Bound credential: %@": {
       "localizations": {
         "en": {
@@ -656,95 +707,95 @@
       },
       "comment": "Fallback approval reason"
     },
-    "Approve this agent for the current session.": {
+    "Allow this process for the current session.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approve this agent for the current session."
+            "value": "Allow this process for the current session."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diesen Agenten für die aktuelle Sitzung genehmigen."
+            "value": "Diesen Prozess für die aktuelle Sitzung zulassen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprobar este agente para la sesión actual."
+            "value": "Permitir este proceso durante la sesión actual."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Autoriser cet agent pour la session en cours."
+            "value": "Autoriser ce processus pour la session en cours."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprovar este agente para a sessão atual."
+            "value": "Permitir este processo durante a sessão atual."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешить этому агенту работу в текущем сеансе."
+            "value": "Разрешить этому процессу доступ в текущем сеансе."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "批准此智能体在当前会话中访问。"
+            "value": "允许此进程在当前会话中访问。"
           }
         }
       },
       "comment": "Approval reason for one agent session"
     },
-    "Confirm this agent with Touch ID for the current session.": {
+    "Allow this process for the current session with Touch ID.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirm this agent with Touch ID for the current session."
+            "value": "Allow this process for the current session with Touch ID."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diesen Agenten mit Touch ID für die aktuelle Sitzung bestätigen."
+            "value": "Diesen Prozess mit Touch ID für die aktuelle Sitzung zulassen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmar este agente con Touch ID para la sesión actual."
+            "value": "Permitir este proceso durante la sesión actual con Touch ID."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmer cet agent avec Touch ID pour la session en cours."
+            "value": "Autoriser ce processus pour la session en cours avec Touch ID."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmar este agente com Touch ID para a sessão atual."
+            "value": "Permitir este processo durante a sessão atual com Touch ID."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Подтвердить этого агента с помощью Touch ID для текущего сеанса."
+            "value": "Разрешить этому процессу доступ в текущем сеансе с помощью Touch ID."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "使用 Touch ID 确认此智能体可用于当前会话。"
+            "value": "使用 Touch ID 允许此进程在当前会话中访问。"
           }
         }
       },
@@ -5862,52 +5913,6 @@
         }
       }
     },
-    "Applies until this process exits, you revoke it, or the vault locks.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies until this process exits, you revoke it, or the vault locks."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gilt, bis dieser Prozess beendet, die Freigabe widerrufen oder der Tresor gesperrt wird."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se aplica hasta que este proceso termine, revoques la aprobación o se bloquee la bóveda."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S’applique jusqu’à ce que ce processus se termine, que vous révoquiez l’accès ou que le coffre se verrouille."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aplica-se até que este processo seja encerrado, você revogue o acesso ou o cofre seja bloqueado."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Действует до завершения процесса, отзыва разрешения или блокировки хранилища."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "有效期至此进程退出、你撤销批准或密钥库锁定。"
-          }
-        }
-      }
-    },
     "Approval and locking": {
       "localizations": {
         "en": {
@@ -6369,48 +6374,48 @@
       },
       "comment": "Approval notification action"
     },
-    "Approve agent": {
+    "Allow session": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approve agent"
+            "value": "Allow session"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Agenten genehmigen"
+            "value": "Sitzung erlauben"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprobar agente"
+            "value": "Permitir sesión"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Autoriser l’agent"
+            "value": "Autoriser la session"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprovar agente"
+            "value": "Permitir sessão"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешить агенту"
+            "value": "Разрешить сеанс"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "批准智能体"
+            "value": "允许会话"
           }
         }
       }
@@ -6507,94 +6512,94 @@
         }
       }
     },
-    "Approve this agent": {
+    "Allow session with Touch ID": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approve this agent"
+            "value": "Allow session with Touch ID"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diesen Agenten genehmigen"
+            "value": "Sitzung mit Touch ID erlauben"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprobar este agente"
+            "value": "Permitir sesión con Touch ID"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Autoriser cet agent"
+            "value": "Autoriser la session avec Touch ID"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprovar este agente"
+            "value": "Permitir sessão com Touch ID"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешить этому агенту"
+            "value": "Разрешить сеанс с помощью Touch ID"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "批准此智能体"
+            "value": "使用 Touch ID 允许会话"
           }
         }
       }
     },
-    "Approve this agent with Touch ID": {
+    "Allow a Sallyport session for %@": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approve this agent with Touch ID"
+            "value": "Allow a Sallyport session for %@"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Diesen Agenten mit Touch ID genehmigen"
+            "value": "Sallyport-Sitzung für %@ erlauben"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprobar este agente con Touch ID"
+            "value": "Permitir una sesión de Sallyport para %@"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Autoriser cet agent avec Touch ID"
+            "value": "Autoriser une session Sallyport pour %@"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprovar este agente com Touch ID"
+            "value": "Permitir uma sessão do Sallyport para %@"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешить этому агенту с помощью Touch ID"
+            "value": "Разрешить сеанс Sallyport для %@"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "使用 Touch ID 批准此智能体"
+            "value": "允许 %@ 使用 Sallyport 会话"
           }
         }
       }
@@ -19033,48 +19038,48 @@
         }
       }
     },
-    "Requests access to Sallyport": {
+    "Requests a Sallyport session": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Requests access to Sallyport"
+            "value": "Requests a Sallyport session"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fordert Zugriff auf Sallyport an"
+            "value": "Fordert eine Sallyport-Sitzung an"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Solicita acceso a Sallyport"
+            "value": "Solicita una sesión de Sallyport"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Demande l’accès à Sallyport"
+            "value": "Demande une session Sallyport"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Solicita acesso ao Sallyport"
+            "value": "Solicita uma sessão do Sallyport"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Запрашивает доступ к Sallyport"
+            "value": "Запрашивает сеанс Sallyport"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "请求访问 Sallyport"
+            "value": "请求 Sallyport 会话"
           }
         }
       }
@@ -19259,52 +19264,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "每次使用此密钥时都需要批准，包括已获批准的智能体会话。"
-          }
-        }
-      }
-    },
-    "Requires Touch ID. Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requires Touch ID. Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Erfordert Touch ID. Die Sitzungsfreigabe gilt, bis dieser Prozess beendet, die Freigabe widerrufen oder der Tresor gesperrt wird. Einstellungen pro Aufruf gelten weiterhin."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requiere Touch ID. La aprobación de sesión dura hasta que este proceso termina, la revocas o se bloquea la bóveda. Los ajustes por llamada siguen aplicándose."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nécessite Touch ID. L’autorisation de session reste valable jusqu’à ce que le processus se termine, que vous la révoquiez ou que le coffre se verrouille. Les réglages par appel restent actifs."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Exige Touch ID. A aprovação da sessão permanece válida até que o processo seja encerrado, você a revogue ou o cofre seja bloqueado. Os ajustes por chamada continuam em vigor."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Требуется Touch ID. Разрешение на сеанс действует до завершения процесса, его отзыва или блокировки хранилища. Настройки для отдельных вызовов продолжают действовать."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "需要 Touch ID。会话批准有效期至此进程退出、你撤销批准或密钥库锁定。每次调用的设置仍然适用。"
           }
         }
       }
@@ -21472,48 +21431,48 @@
         }
       }
     },
-    "Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply.": {
+    "The session ends when this process exits, you revoke access, or the vault locks. Future requests won't prompt again unless per-call approval applies.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply."
+            "value": "The session ends when this process exits, you revoke access, or the vault locks. Future requests won't prompt again unless per-call approval applies."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Die Sitzungsfreigabe gilt, bis dieser Prozess beendet, die Freigabe widerrufen oder der Tresor gesperrt wird. Einstellungen pro Aufruf gelten weiterhin."
+            "value": "Die Sitzung endet, wenn dieser Prozess beendet wird, du den Zugriff widerrufst oder der Tresor gesperrt wird. Weitere Anfragen werden nicht erneut bestätigt, sofern keine Freigabe pro Aufruf gilt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "La aprobación de sesión dura hasta que este proceso termina, la revocas o se bloquea la bóveda. Los ajustes por llamada siguen aplicándose."
+            "value": "La sesión termina cuando este proceso finaliza, revocas el acceso o se bloquea la bóveda. Las solicitudes futuras no volverán a pedir confirmación salvo que se aplique la aprobación por llamada."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L’autorisation de session reste valable jusqu’à ce que le processus se termine, que vous la révoquiez ou que le coffre se verrouille. Les réglages par appel restent actifs."
+            "value": "La session se termine lorsque ce processus s’arrête, que vous révoquez l’accès ou que le coffre se verrouille. Les requêtes suivantes ne demanderont plus de confirmation, sauf si l’autorisation par appel s’applique."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "A aprovação da sessão permanece válida até que o processo seja encerrado, você a revogue ou o cofre seja bloqueado. Os ajustes por chamada continuam em vigor."
+            "value": "A sessão termina quando este processo é encerrado, você revoga o acesso ou o cofre é bloqueado. Solicitações futuras não pedirão nova confirmação, a menos que a aprovação por chamada seja aplicada."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешение на сеанс действует до завершения процесса, его отзыва или блокировки хранилища. Настройки для отдельных вызовов продолжают действовать."
+            "value": "Сеанс завершится при завершении процесса, отзыве доступа или блокировке хранилища. Следующие запросы не потребуют подтверждения, кроме запросов с настройкой подтверждения каждого вызова."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "会话批准有效期至此进程退出、你撤销批准或密钥库锁定。每次调用的设置仍然适用。"
+            "value": "当此进程退出、你撤销访问权限或密钥库锁定时，会话结束。后续请求不会再次提示，除非启用了每次调用审批。"
           }
         }
       }
@@ -22852,48 +22811,48 @@
         }
       }
     },
-    "Signs in through the browser and stores OAuth tokens in the vault. Tool-call responses are scrubbed; upstream catalog metadata is not.": {
+    "Signs in through the browser and stores OAuth tokens in the vault. Tool results, server error messages, and catalog metadata are returned without content rewriting.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Signs in through the browser and stores OAuth tokens in the vault. Tool-call responses are scrubbed; upstream catalog metadata is not."
+            "value": "Signs in through the browser and stores OAuth tokens in the vault. Tool results, server error messages, and catalog metadata are returned without content rewriting."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Meldet dich über den Browser an und speichert OAuth-Token im Tresor. Antworten auf Tool-Aufrufe werden bereinigt; Katalogmetadaten des Upstreams nicht."
+            "value": "Die Anmeldung erfolgt im Browser; OAuth-Token werden im Tresor gespeichert. Tool-Ergebnisse, Serverfehlermeldungen und Katalogmetadaten werden ohne inhaltliche Änderungen zurückgegeben."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Inicia sesión mediante el navegador y almacena los tokens de OAuth en la bóveda. Las respuestas a llamadas de herramientas se depuran; los metadatos del catálogo del servidor de origen no."
+            "value": "Inicia sesión en el navegador y guarda los tokens OAuth en la bóveda. Los resultados de herramientas, los mensajes de error del servidor y los metadatos del catálogo se devuelven sin modificar su contenido."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La connexion s’effectue dans le navigateur et les jetons OAuth sont stockés dans le coffre. Les réponses aux appels d’outil sont nettoyées, mais pas les métadonnées du catalogue du serveur en amont."
+            "value": "La connexion s’effectue dans le navigateur et les jetons OAuth sont stockés dans le coffre. Les résultats des outils, les messages d’erreur du serveur et les métadonnées du catalogue sont renvoyés sans réécriture du contenu."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Inicia a sessão pelo navegador e armazena os tokens OAuth no cofre. As respostas a chamadas de ferramentas são filtradas; os metadados do catálogo do servidor upstream não são."
+            "value": "O login é feito pelo navegador e os tokens OAuth ficam no cofre. Resultados das ferramentas, mensagens de erro do servidor e metadados do catálogo são retornados sem alteração de conteúdo."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Вход выполняется через браузер, а токены OAuth сохраняются в хранилище. Ответы на вызовы инструментов очищаются от секретов, но метаданные каталога вышестоящего сервера не очищаются."
+            "value": "Вход выполняется через браузер, а токены OAuth сохраняются в хранилище. Результаты инструментов, сообщения об ошибках сервера и метаданные каталога возвращаются без изменения содержимого."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "通过浏览器登录，并将 OAuth 令牌存储在密钥库中。工具调用响应中的敏感数据会被清理；上游目录元数据不会被清理。"
+            "value": "通过浏览器登录，并将 OAuth 令牌存入密钥库。工具结果、服务器错误消息和目录元数据均按原内容返回，不会被重写。"
           }
         }
       }
@@ -23634,48 +23593,48 @@
         }
       }
     },
-    "Stores credentials and uses them for configured agent actions without returning them to the agent.": {
+    "Uses vault credentials for configured actions without exposing the vault to the agent. Target responses are returned without content filtering.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stores credentials and uses them for configured agent actions without returning them to the agent."
+            "value": "Uses vault credentials for configured actions without exposing the vault to the agent. Target responses are returned without content filtering."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Speichert Zugangsdaten und verwendet sie für konfigurierte Agent-Aktionen, ohne sie an den Agenten zurückzugeben."
+            "value": "Verwendet Tresor-Zugangsdaten für konfigurierte Aktionen, ohne dem Agenten Zugriff auf den Tresor zu geben. Zielantworten werden ohne Inhaltsfilterung zurückgegeben."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Almacena credenciales y las usa para las acciones configuradas del agente sin devolvérselas."
+            "value": "Usa las credenciales de la bóveda para las acciones configuradas sin exponer la bóveda al agente. Las respuestas del destino se devuelven sin filtrar su contenido."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stocke les données d’authentification et les utilise pour les actions d’agent configurées sans les renvoyer à l’agent."
+            "value": "Utilise les identifiants du coffre pour les actions configurées sans exposer le coffre à l’agent. Les réponses des cibles sont renvoyées sans filtrage du contenu."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Armazena credenciais e as usa nas ações configuradas para agentes sem devolvê-las ao agente."
+            "value": "Usa credenciais do cofre em ações configuradas sem expor o cofre ao agente. As respostas do destino são retornadas sem filtragem de conteúdo."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Хранит учётные данные и использует их для настроенных действий, не передавая агенту."
+            "value": "Использует учётные данные из хранилища для настроенных действий, не открывая агенту доступ к хранилищу. Ответы целей возвращаются без фильтрации."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "存储凭证，并将其用于已配置的智能体操作，而不会将凭证返回给智能体。"
+            "value": "使用保险库凭证执行已配置的操作，而不向智能体开放保险库。目标响应未经内容过滤即返回。"
           }
         }
       }

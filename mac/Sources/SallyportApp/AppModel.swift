@@ -683,7 +683,10 @@ final class AppModel: Approver, CredentialPrompter {
         }
         let prov = SallyportKit.Provenance(origin: originHop, chain: chain, intact: o.validSignature)
         let action = ActionDescriptor(channel: req.channel, tool: req.tool,
-                                      summary: req.summary, host: req.host.isEmpty ? nil : req.host)
+                                      summary: req.summary, host: req.host.isEmpty ? nil : req.host,
+                                      bodyPreview: req.bodyPreview,
+                                      bodyByteCount: req.bodyByteCount,
+                                      bodyPreviewTruncated: req.bodyPreviewTruncated)
         let why = WhyDescriptor(rule: req.rule, reason: req.reason)
         return ApprovalRequest(id: req.id, action: action, why: why,
                                provenance: prov, mode: req.mode)

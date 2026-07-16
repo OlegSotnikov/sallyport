@@ -2,7 +2,7 @@ import Foundation
 import SallyportKit   // JSONValue
 
 /// Executes `http.request` calls. It resolves a credential by host and path,
-/// injects it, and returns the response without exposing the credential. Requests
+/// injects it, and returns the response without content filtering. Requests
 /// with credentials do not follow redirects; other requests follow only safe
 /// same-origin redirects.
 
@@ -76,7 +76,7 @@ public struct HTTPExecutor: ChannelExecutor {
     public let maxBody: Int
 
     let netGuard: NetGuard
-    let session: URLSession
+    let transport: PinnedHTTPTransport
     let oauth: OAuth2TokenCache
 
     /// Builds an executor. `timeout` <= 0 means 30 s; `maxBody` <= 0 means 8 MiB.
@@ -97,10 +97,11 @@ public struct HTTPExecutor: ChannelExecutor {
         self.timeout = timeout.isFinite && timeout > 0 ? min(timeout, 3_600) : 30
         self.maxBody = maxBody > 0 ? min(maxBody, 64 << 20) : 8 << 20
         self.netGuard = netGuard
-        let session = URLSession(configuration: configuration)
-        self.session = session
-        // OAuth token requests use the same session and network guard.
-        self.oauth = OAuth2TokenCache(session: session, timeout: self.timeout, netGuard: netGuard)
+        let transport = PinnedHTTPTransport(configuration: configuration)
+        self.transport = transport
+        // OAuth token requests use the same pinned transport and network guard.
+        self.oauth = OAuth2TokenCache(transport: transport, timeout: self.timeout,
+                                      netGuard: netGuard)
     }
 
     /// Executes an `http.request` action and returns either parsed `json` or a
@@ -149,24 +150,25 @@ public struct HTTPExecutor: ChannelExecutor {
 
         // Resolve the bound credential; `bound` gates the guard's private-range
         // carve-out below.
-        let cred = try resolve(originHost, url.path(percentEncoded: false))
+        var cred = try await resolve(originHost, url.path(percentEncoded: false))
+        // Own and wipe the resolved vault bytes on every exit path. An explicit
+        // wipe immediately after injection keeps the lifetime short; this defer
+        // also covers destination validation and adapter failures.
+        defer { cred?.secret.zeroize() }
         let allowInsecureTLS = cred?.insecureTLS ?? false
 
         // Validate the destination before adding or sending a credential. Bound
         // hosts may resolve to private ranges; metadata addresses remain blocked.
-        try netGuard.validate(host: originHost, bound: cred != nil)
+        let destination = try netGuard.destination(for: url, bound: cred != nil)
 
         // Credentials require HTTPS except for exact loopback development hosts.
         if cred != nil, scheme != "https", !Self.isLoopbackHost(originHost) {
             throw HTTPExecError.insecureCredentialTransport(originHost)
         }
 
-        // Keep injected values for response redaction and later zeroization.
-        var injected: [Data] = []
-        if var cred {
-            injected = try await Adapters.inject(cred, into: &request, body: bodyData, oauth: oauth)
-            // Wipe the plaintext copy after adding it to the request.
-            cred.secret.zeroize()
+        if let resolved = cred {
+            try await Adapters.inject(resolved, into: &request, body: bodyData, oauth: oauth)
+            cred?.secret.zeroize()
         }
 
         // Credentialed redirects are refused. A key can disable certificate
@@ -176,16 +178,11 @@ public struct HTTPExecutor: ChannelExecutor {
                                     allowInsecureTLS: allowInsecureTLS, maxBody: maxBody)
         let http: HTTPURLResponse
         let body: Data
-        do {
-            // Cap the response as it streams.
-            (body, http) = try await policy.loadCapped(
-                request: request, session: session, hardTimeout: timeout)
-        } catch {
-            Self.zeroizeSecrets(&injected)
-            throw error
-        }
+        // Cap the response as it streams.
+        (body, http) = try await transport.loadCapped(
+            request: request, destination: destination, policy: policy,
+            hardTimeout: timeout)
         if policy.tooManyRedirects {
-            Self.zeroizeSecrets(&injected)
             throw HTTPExecError.tooManyRedirects
         }
         var output: [String: JSONValue] = [
@@ -199,7 +196,7 @@ public struct HTTPExecutor: ChannelExecutor {
         } else {
             output["body"] = .string(String(decoding: body, as: UTF8.self))
         }
-        return ExecOutput(output: output, bytesOut: body.count, injected: injected)
+        return ExecOutput(output: output, bytesOut: body.count)
     }
 
     // MARK: Args and body helpers
@@ -249,11 +246,6 @@ public struct HTTPExecutor: ChannelExecutor {
         }
         guard let f = t.first, f == UInt8(ascii: "{") || f == UInt8(ascii: "[") else { return nil }
         return try? JSONDecoder().decode(JSONValue.self, from: Data(t))
-    }
-
-    /// Wipes injected credential copies.
-    static func zeroizeSecrets(_ ss: inout [Data]) {
-        for i in ss.indices { ss[i].zeroize() }
     }
 
     private static func toStr(_ v: JSONValue?) -> String { v?.stringValue ?? "" }
@@ -523,8 +515,8 @@ final class RedirectPolicy: NSObject, URLSessionDataDelegate, @unchecked Sendabl
 // MARK: - Network guard
 
 /// Blocks cloud metadata and link-local addresses. Other private ranges require
-/// a credential bound to the host. Public addresses are allowed. Validation is
-/// performed before URLSession connects and does not pin the resolved address.
+/// a credential bound to the host. Public addresses are allowed. Each successful
+/// lookup returns the complete validated snapshot that the transport must pin.
 struct NetGuard: Sendable {
     /// Injectable address classifier for tests.
     var classify: @Sendable (IPAddr) -> IPClass = NetGuard.classifyIP
@@ -575,8 +567,9 @@ struct NetGuard: Sendable {
         }
     }
 
-    /// Resolves `host` and rejects the request if any address is blocked.
-    func validate(host: String, bound: Bool) throws {
+    /// Resolves `host`, rejects the request if any address is blocked, and
+    /// returns one de-duplicated snapshot for connection pinning.
+    func validatedAddresses(host: String, bound: Bool) throws -> [IPAddr] {
         let addrs: [IPAddr]
         if let ip = IPAddr(host) {
             addrs = [ip]
@@ -584,9 +577,29 @@ struct NetGuard: Sendable {
             addrs = try resolve(host)
         }
         guard !addrs.isEmpty else { throw HTTPExecError.noAddresses(host: host) }
+        var snapshot: [IPAddr] = []
+        var seen: Set<IPAddr> = []
         for ip in addrs {
             if let blocked = check(ip, bound: bound) { throw blocked }
+            let normalized = ip.unmapped()
+            if seen.insert(normalized).inserted { snapshot.append(normalized) }
         }
+        guard !snapshot.isEmpty else { throw HTTPExecError.noAddresses(host: host) }
+        return snapshot
+    }
+
+    /// Resolves and validates exactly once for one logical URL load.
+    func destination(for url: URL, bound: Bool) throws -> PinnedDestination {
+        guard let host = url.host(percentEncoded: false), !host.isEmpty else {
+            throw HTTPExecError.badURL(url.absoluteString)
+        }
+        return try PinnedDestination(url: url,
+                                     addresses: validatedAddresses(host: host, bound: bound))
+    }
+
+    /// Validation-only compatibility helper for call sites that do not yet dial.
+    func validate(host: String, bound: Bool) throws {
+        _ = try validatedAddresses(host: host, bound: bound)
     }
 
     /// getaddrinfo-backed resolver (both address families, TCP).

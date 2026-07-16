@@ -3,8 +3,12 @@ import Foundation
 /// Builds approval notification content and maps notification actions to app decisions.
 public enum ApprovalNotification {
 
-    /// The single notification category registered with the center.
+    /// Per-call notifications keep the original category identifier.
     public static let categoryIdentifier = "dev.sallyport.approval"
+
+    /// Session notifications use a separate category so their primary action
+    /// can describe the broader grant instead of looking like a one-call approval.
+    public static let sessionCategoryIdentifier = "dev.sallyport.approval.session"
 
     /// Identifiers for the category's buttons (parsed back from a tapped action).
     public enum ActionID {
@@ -52,9 +56,9 @@ public enum ApprovalNotification {
         return Content(
             identifier: request.id,
             title: origin.appName ?? origin.name,
-            subtitle: isSession ? "Requests access to Sallyport" : actionLine(for: request.action),
+            subtitle: isSession ? "Requests a Sallyport session" : actionLine(for: request.action),
             body: request.why.reason,
-            categoryIdentifier: categoryIdentifier,
+            categoryIdentifier: isSession ? sessionCategoryIdentifier : categoryIdentifier,
             requestID: request.id,
             iconSourcePath: origin.path)
     }

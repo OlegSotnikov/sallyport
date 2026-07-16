@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/sallyport/sallyport/internal/dlp"
 	"github.com/sallyport/sallyport/internal/sshexec"
 	"github.com/sallyport/sallyport/internal/sshtest"
 )
@@ -26,8 +25,8 @@ func (f fakeKeys) SecretValue(name string) ([]byte, error) {
 	return nil, os.ErrNotExist
 }
 
-// echoHandler returns stdout keyed off the command; a couple of commands emit a
-// secret so we can prove DLP scrubs the recording and the returned output.
+// echoHandler returns stdout keyed off the command; one command emits a
+// token-shaped value so tests can prove output is preserved unchanged.
 func echoHandler(cmd string) (string, string, int) {
 	switch {
 	case strings.HasPrefix(cmd, "df"):
@@ -67,7 +66,7 @@ func TestExec_Basic(t *testing.T) {
 	srv, keys, keyPEM := newServerWithKey(t)
 	e := sshexec.New(keys, filepath.Join(t.TempDir(), "known_hosts"), 5*time.Second)
 
-	res, err := e.Exec(context.Background(), hostRef(srv, "accept-new"), "df -h /", sshexec.Opts{Redactor: dlp.Redact})
+	res, err := e.Exec(context.Background(), hostRef(srv, "accept-new"), "df -h /", sshexec.Opts{})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -170,16 +169,15 @@ func TestHostKey_StrictUnknownFails(t *testing.T) {
 	}
 }
 
-// TestRecording writes an asciicast and proves an echoed secret is redacted in
-// the recording and in the returned stdout.
-func TestRecording_RedactsSecret(t *testing.T) {
+// TestRecording_PreservesTokenShapedOutput proves the helper does not mutate
+// command output based on credential-like patterns.
+func TestRecording_PreservesTokenShapedOutput(t *testing.T) {
 	srv, keys, _ := newServerWithKey(t)
 	e := sshexec.New(keys, filepath.Join(t.TempDir(), "known_hosts"), 5*time.Second)
 
 	recPath := filepath.Join(t.TempDir(), "rec", "sess", "1.cast")
 	res, err := e.Exec(context.Background(), hostRef(srv, "accept-new"), "leak-token", sshexec.Opts{
 		RecordPath: recPath,
-		Redactor:   dlp.Redact,
 	})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
@@ -187,20 +185,18 @@ func TestRecording_RedactsSecret(t *testing.T) {
 	if res.Recording != recPath {
 		t.Fatalf("recording path = %q, want %q", res.Recording, recPath)
 	}
-	if res.Redactions == 0 {
-		t.Fatal("expected at least one redaction")
+	const token = "sk_live_abcdefghij1234567890"
+	if !strings.Contains(string(res.Stdout), token) {
+		t.Fatalf("token-shaped stdout was changed: %q", res.Stdout)
 	}
-	// Returned stdout must not contain the raw token.
-	if strings.Contains(string(res.Stdout), "sk_live_abcdefghij1234567890") {
-		t.Fatalf("secret leaked into returned stdout: %q", res.Stdout)
-	}
-	// The .cast file must exist, be valid asciicast v2, and not contain the token.
+	// The .cast file must exist, be valid asciicast v2, and preserve the same
+	// remote bytes. Recordings are sensitive data, not a sanitization boundary.
 	data, err := os.ReadFile(recPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "sk_live_abcdefghij1234567890") {
-		t.Fatal("secret leaked into the recording")
+	if !strings.Contains(string(data), token) {
+		t.Fatal("token-shaped output was changed in the recording")
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) < 2 {
@@ -208,9 +204,6 @@ func TestRecording_RedactsSecret(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], `"version":2`) {
 		t.Fatalf("bad asciicast header: %s", lines[0])
-	}
-	if !strings.Contains(string(data), "«redacted»") {
-		t.Fatal("recording should contain the redaction marker")
 	}
 }
 

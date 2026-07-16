@@ -220,15 +220,39 @@ private func freshOAuthStore() throws -> VaultStore {
 struct MCPOAuthUnitTests {
 
     @Test("PKCE: S256 challenge is the base64url SHA-256 of the verifier")
-    func pkce() {
-        let p = MCPOAuth.PKCE()
+    func pkce() throws {
+        let p = try MCPOAuth.PKCE()
         #expect(p.verifier.count >= 43)   // RFC 7636 minimum entropy
         #expect(!p.challenge.contains("="))
         #expect(!p.challenge.contains("+"))
         #expect(!p.challenge.contains("/"))
         let expected = Data(SHA256.hash(data: Data(p.verifier.utf8))).base64URLEncoded
         #expect(p.challenge == expected)
-        #expect(MCPOAuth.PKCE().verifier != p.verifier)   // fresh every time
+        #expect(try MCPOAuth.PKCE().verifier != p.verifier)   // fresh every time
+    }
+
+    @Test("PKCE and CSRF state fail closed when secure randomness is unavailable")
+    func randomnessFailure() {
+        let failingRandom: MCPOAuth.RandomBytes = { _ in
+            throw MCPOAuth.OAuthError.secureRandomFailed
+        }
+        #expect(throws: MCPOAuth.OAuthError.secureRandomFailed) {
+            _ = try MCPOAuth.PKCE(randomBytes: failingRandom)
+        }
+        #expect(throws: MCPOAuth.OAuthError.secureRandomFailed) {
+            _ = try MCPOAuth.randomState(randomBytes: failingRandom)
+        }
+    }
+
+    @Test("PKCE and CSRF state reject short random output")
+    func shortRandomOutput() {
+        let shortRandom: MCPOAuth.RandomBytes = { count in Data(repeating: 0xa5, count: count - 1) }
+        #expect(throws: MCPOAuth.OAuthError.secureRandomFailed) {
+            _ = try MCPOAuth.PKCE(randomBytes: shortRandom)
+        }
+        #expect(throws: MCPOAuth.OAuthError.secureRandomFailed) {
+            _ = try MCPOAuth.randomState(randomBytes: shortRandom)
+        }
     }
 
     @Test("the WWW-Authenticate challenge's resource_metadata link is parsed")
@@ -271,16 +295,15 @@ struct MCPOAuthUnitTests {
         }
     }
 
-    @Test("an OAuth token-error message never echoes a submitted secret (#11)")
-    func tokenErrorScrubsSubmittedSecret() {
-        // A hostile/misconfigured token endpoint bounces the refresh token we
-        // POSTed back inside error_description — an opaque token generic DLP
-        // shapes won't catch. Passing it as a submitted secret redacts it exactly.
+    @Test("an OAuth token-error message is returned without content rewriting")
+    func tokenErrorIsFaithful() {
+        // A token endpoint reflects the refresh token in error_description.
+        // Sallyport bounds the diagnostic but does not edit its content.
         let token = "rt_super_secret_refresh_value_1234567890"
         let body = Data(#"{"error":"invalid_grant","error_description":"the token \#(token) is bad"}"#.utf8)
-        let scrubbed = MCPOAuth.shortBody(body, secrets: [Data(token.utf8)])
-        #expect(!scrubbed.contains(token), "the submitted refresh token must never survive into the message")
-        #expect(scrubbed.contains("invalid_grant"), "the RFC error code is still surfaced")
+        let message = MCPOAuth.shortBody(body)
+        #expect(message.contains(token))
+        #expect(message.contains("invalid_grant"), "the RFC error code is surfaced")
     }
 
     @Test("the loopback callback parses code/state and rejects a foreign path")
@@ -334,7 +357,7 @@ struct MCPOAuthE2ETests {
         #expect(grant?.redirectURI.hasPrefix("http://127.0.0.1:") == true)
     }
 
-    @Test("the sealed token authenticates real MCP calls; the echoed header is scrubbed")
+    @Test("the sealed token authenticates real MCP calls; the response is faithful")
     func callWithOAuth() async throws {
         let (base, proc) = try launchFakeOAuth()
         defer { proc.terminate() }
@@ -362,11 +385,11 @@ struct MCPOAuthE2ETests {
         #expect(r.ok, "oauth upstream call failed: \(r.reason)")
         let text = String(describing: r.output)
         #expect(text.contains("hey"))
-        // The server echoed `Authorization: Bearer at-N`; the agent must not see it.
+        // The server echoed `Authorization: Bearer at-N`; Sallyport leaves the
+        // response unchanged.
         let token = try await manager.grant(upstream: "linear")?.accessToken ?? ""
         #expect(!token.isEmpty)
-        #expect(!text.contains(token))
-        #expect(text.contains("«redacted"))
+        #expect(text.contains(token))
     }
 
     @Test("an expired access token refreshes automatically, rotating the refresh token")
@@ -390,8 +413,7 @@ struct MCPOAuthE2ETests {
         manager.kill(name: "linear")
 
         // A call now must refresh transparently — and still work.
-        let (output, injected) = try await manager.call(entry: entry, tool: "echo", args: [:])
-        #expect(!injected.isEmpty)
+        let output = try await manager.call(entry: entry, tool: "echo", args: [:])
         guard case let .array(content)? = output["content"],
               case let .object(firstItem)? = content.first,
               let text = firstItem["text"]?.stringValue else {

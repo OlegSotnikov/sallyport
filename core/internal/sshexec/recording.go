@@ -15,21 +15,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Redactor masks fixed credential patterns and returns the match count.
-type Redactor func([]byte) ([]byte, int)
-
 // cast writes an asciicast v2 recording (https://docs.asciinema.org/manual/asciicast/v2/):
 // a JSON header line followed by [time, code, data] event lines. It is the
-// session record referenced from the audit row for an ssh.exec. Contiguous
-// stream data is redacted before writing.
+// session record referenced from the audit row for an ssh.exec. It does not
+// rewrite command output based on credential-like patterns; callers must treat
+// the recording as sensitive.
 type cast struct {
-	mu         sync.Mutex
-	w          *bufio.Writer
-	f          *os.File
-	start      time.Time
-	redactor   Redactor
-	redactions int
-	events     []castEvent
+	mu      sync.Mutex
+	w       *bufio.Writer
+	f       *os.File
+	start   time.Time
+	pending *castEvent
+	err     error
 }
 
 type castEvent struct {
@@ -42,7 +39,7 @@ const maxCastEventBytes = 64 << 10
 
 // newCast creates the recording file (parents 0700, file 0600) and writes the
 // asciicast header. width/height are the assumed terminal size for playback.
-func newCast(path string, width, height int, redactor Redactor) (*cast, error) {
+func newCast(path string, width, height int) (*cast, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -63,7 +60,7 @@ func newCast(path string, width, height int, redactor Redactor) (*cast, error) {
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
-	c, err := newCastWriter(f, width, height, redactor)
+	c, err := newCastWriter(f, width, height)
 	if err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
@@ -72,11 +69,8 @@ func newCast(path string, width, height int, redactor Redactor) (*cast, error) {
 }
 
 // newCastWriter records to an arbitrary writer. close flushes but owns no file.
-func newCastWriter(w io.Writer, width, height int, redactor Redactor) (*cast, error) {
-	if redactor == nil {
-		redactor = func(b []byte) ([]byte, int) { return b, 0 }
-	}
-	c := &cast{w: bufio.NewWriter(w), start: time.Now(), redactor: redactor}
+func newCastWriter(w io.Writer, width, height int) (*cast, error) {
+	c := &cast{w: bufio.NewWriter(w), start: time.Now()}
 	header := map[string]any{
 		"version":   2,
 		"width":     width,
@@ -102,97 +96,67 @@ func (c *cast) writeLine(v any) error {
 	return c.w.WriteByte('\n')
 }
 
-// event buffers one stream chunk. Code "o" covers stdout and stderr; code "i"
-// records the command.
-func (c *cast) event(code string, data []byte) {
+// event appends one stream chunk. Code "o" covers stdout and stderr; code "i"
+// records the command. Adjacent chunks of the same code are coalesced only up
+// to maxCastEventBytes, keeping memory bounded without retaining the full
+// session until close.
+func (c *cast) event(code string, data []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// SSH transport packet boundaries are arbitrary and can split a credential
-	// in the middle. Keep bounded event data until close, then redact each
-	// contiguous logical stream as a whole; chunk-local regexes would otherwise
-	// write both halves of a split secret to the cast in cleartext.
+	if c.err != nil {
+		return c.err
+	}
 	now := time.Since(c.start).Seconds()
 	for len(data) > 0 {
-		last := len(c.events) - 1
-		if last >= 0 && c.events[last].code == code && len(c.events[last].data) < maxCastEventBytes {
-			available := maxCastEventBytes - len(c.events[last].data)
-			take := min(available, len(data))
-			c.events[last].data = append(c.events[last].data, data[:take]...)
-			data = data[take:]
-			continue
-		}
-		take := min(maxCastEventBytes, len(data))
-		c.events = append(c.events, castEvent{
-			at:   now,
-			code: code,
-			data: append([]byte(nil), data[:take]...),
-		})
-		data = data[take:]
-	}
-}
-
-// close flushes (and closes the file, when file-backed), returning the total
-// redaction count.
-func (c *cast) close() (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var err error
-	for i := 0; i < len(c.events); {
-		j := i + 1
-		total := len(c.events[i].data)
-		for j < len(c.events) && c.events[j].code == c.events[i].code {
-			total += len(c.events[j].data)
-			j++
-		}
-		raw := make([]byte, 0, total)
-		for k := i; k < j; k++ {
-			raw = append(raw, c.events[k].data...)
-			zero(c.events[k].data)
-		}
-		red, n := c.redactor(raw)
-		c.redactions += n
-		if err == nil {
-			err = c.writeRedactedRun(c.events[i:j], red, total)
-		}
-		zero(raw)
-		i = j
-	}
-	c.events = nil
-	if c.w != nil {
-		if flushErr := c.w.Flush(); err == nil {
-			err = flushErr
-		}
-	}
-	if c.f != nil {
-		if cerr := c.f.Close(); err == nil {
-			err = cerr
-		}
-	}
-	return c.redactions, err
-}
-
-// writeRedactedRun maps whole-stream redaction back onto the original event
-// timestamps. Boundaries are proportional when replacements change length and
-// advance past UTF-8 continuation bytes so a marker is not split across
-// JSON strings. Concatenating the emitted data exactly reproduces red.
-func (c *cast) writeRedactedRun(events []castEvent, red []byte, rawTotal int) error {
-	start := 0
-	rawSeen := 0
-	for i, event := range events {
-		rawSeen += len(event.data)
-		end := len(red)
-		if i < len(events)-1 && rawTotal > 0 {
-			end = int(int64(len(red)) * int64(rawSeen) / int64(rawTotal))
-			for end < len(red) && end > start && red[end]&0xc0 == 0x80 {
-				end++
+		if c.pending != nil && c.pending.code != code {
+			if err := c.flushPendingLocked(); err != nil {
+				return err
 			}
 		}
-		if err := c.writeLine([]any{event.at, event.code, string(red[start:end])}); err != nil {
-			return err
+		if c.pending == nil {
+			c.pending = &castEvent{at: now, code: code}
 		}
-		start = end
+		take := min(maxCastEventBytes-len(c.pending.data), len(data))
+		c.pending.data = append(c.pending.data, data[:take]...)
+		data = data[take:]
+		if len(c.pending.data) == maxCastEventBytes {
+			if err := c.flushPendingLocked(); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// flushPendingLocked writes and clears the bounded pending event. c.mu must be
+// held by the caller.
+func (c *cast) flushPendingLocked() error {
+	if c.pending == nil {
+		return c.err
+	}
+	event := c.pending
+	c.pending = nil
+	err := c.writeLine([]any{event.at, event.code, string(event.data)})
+	zero(event.data)
+	if c.err == nil {
+		c.err = err
+	}
+	return err
+}
+
+// close writes the final bounded event, flushes, and closes the file when
+// file-backed. All writer errors are returned to the executor.
+func (c *cast) close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err := c.flushPendingLocked()
+	if c.w != nil {
+		err = errors.Join(err, c.w.Flush())
+	}
+	if c.f != nil {
+		err = errors.Join(err, c.f.Close())
+	}
+	return err
 }
 
 // outputCap is the shared retention budget for stdout, stderr, and recording.
@@ -239,8 +203,7 @@ func (c *outputCap) isTruncated() bool {
 }
 
 // streamWriter tees a session stream into the recording (as an asciicast event)
-// and a raw buffer (so the executor can redact-and-return the whole output),
-// under a shared output cap.
+// and the returned-output buffer under a shared output cap.
 type streamWriter struct {
 	code string
 	rec  *cast
@@ -264,7 +227,9 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 		q = p[:allow]
 	}
 	if w.rec != nil && len(q) > 0 {
-		w.rec.event(w.code, q)
+		if err := w.rec.event(w.code, q); w.err == nil {
+			w.err = err
+		}
 	}
 	w.n = saturatingAddInt(w.n, len(p))
 	if w.dst != nil && len(q) > 0 {

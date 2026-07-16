@@ -19,13 +19,26 @@ public struct EngineApproval: Sendable {
     public var tool: String
     public var summary: String
     public var host: String
+    /// Display-only preview of the agent-supplied HTTP body, before credential injection.
+    /// Present only for per-call HTTP approvals.
+    public var bodyPreview: String?
+    /// Original request-body size, not the possibly pretty-printed preview size.
+    public var bodyByteCount: Int?
+    public var bodyPreviewTruncated: Bool
     public var origin: Origin
     public var chain: [Hop]
     public init(id: String, mode: String, rule: String, reason: String, channel: String,
-                tool: String, summary: String, host: String, origin: Origin, chain: [Hop]) {
+                tool: String, summary: String, host: String,
+                bodyPreview: String? = nil, bodyByteCount: Int? = nil,
+                bodyPreviewTruncated: Bool = false,
+                origin: Origin, chain: [Hop]) {
         self.id = id; self.mode = mode; self.rule = rule; self.reason = reason
         self.channel = channel; self.tool = tool; self.summary = summary
-        self.host = host; self.origin = origin; self.chain = chain
+        self.host = host
+        self.bodyPreview = bodyPreview
+        self.bodyByteCount = bodyByteCount
+        self.bodyPreviewTruncated = bodyPreviewTruncated
+        self.origin = origin; self.chain = chain
     }
 }
 

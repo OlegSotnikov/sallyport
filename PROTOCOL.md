@@ -60,7 +60,9 @@ Reply:
 }
 ```
 
-Denied calls set `ok:false` and may include `error_code`, `reason`, `rule`, and `decision`. Secret values never appear in a reply.
+Denied calls set `ok:false` and may include `error_code`, `reason`, `rule`, and `decision`. There is
+no credential-reveal reply, but target and upstream content is returned without credential-content
+filtering and may itself contain a secret value.
 
 Malformed frames may return:
 
@@ -100,7 +102,8 @@ For each `invoke`, the app:
 3. Applies the new-agent session gate, unless the process is already approved or allowlisted.
 4. Selects observe mode when the session gate is off.
 5. Writes a durable audit intent. Failure prevents execution.
-6. Injects only credentials bound to the target, executes the request, and scrubs output.
+6. Injects only credentials bound to the target, executes the request, and returns the bounded
+   executor result without inspecting or rewriting its application content.
 7. Attempts to append the sealed, hash-chained, signed result row.
 
 Session approval lasts until the process exits, the session is revoked, or the vault locks. A per-call approval covers one invocation. If both gates apply, one card can satisfy both.
@@ -144,7 +147,9 @@ Settings are:
 
 ## Security invariants
 
-1. Secret values never reach agents, audit payloads, activity rows, approval payloads, logs, or errors.
+1. Sallyport does not intentionally place managed secret values in agent, audit, activity, approval,
+   or log payloads. Executor results are not inspected or rewritten and may contain sensitive data
+   supplied by the target or upstream server.
 2. A locked, sealed, or quarantined vault denies tool calls.
 3. The process identity used by the decision engine comes from the kernel-observed socket peer.
 4. Credential injection is limited to configured hosts and paths. Credentialed cross-host and HTTPS-to-HTTP redirects are blocked.
@@ -154,9 +159,14 @@ Settings are:
 
 ## Implemented channels
 
-- `http.request`: host-bound HTTP credentials, redirect checks, internal-network checks, and output scrubbing.
+- `http.request`: host-bound HTTP credentials, redirect checks, internal-network checks, and bounded
+  response handling.
 - `ssh.exec`: configured SSH hosts and imported SSH keys through `sp-ssh`, with sealed recordings when enabled.
 - `sallyport.request_credential`: asks the user to add a credential and returns metadata only.
 - `<upstream>.<tool>`: configured stdio or streamable-HTTP MCP servers. Remote authentication uses a host-bound API key or OAuth 2.1.
+
+Authenticated MCP initialization and catalog metadata enters the agent-visible catalog without
+content inspection or rewriting. Names, descriptions, and schemas remain arbitrary
+upstream-controlled content outside the invocation ladder.
 
 See [docs/14-trust-model.md](docs/14-trust-model.md) for the fixed decision ladder. This protocol covers implemented behavior.

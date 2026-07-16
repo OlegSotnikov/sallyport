@@ -32,7 +32,7 @@ struct UpstreamProcessSecurityTests {
             name: "closed-stdin",
             command: "/bin/sh",
             args: ["-c", "exec 0<&-; sleep 1"],
-            extraEnv: [:], injected: [], onExit: { _ in })
+            extraEnv: [:], onExit: { _ in })
         defer { connection.terminate() }
         try await Task.sleep(for: .milliseconds(50))
         #expect(connection.isAlive, "the process must still be alive after closing only stdin")
@@ -47,7 +47,7 @@ struct UpstreamProcessSecurityTests {
             name: "never-reads",
             command: "/bin/sleep",
             args: ["5"],
-            extraEnv: [:], injected: [], onExit: { _ in })
+            extraEnv: [:], onExit: { _ in })
         defer { connection.terminate() }
 
         let oversizedForPipe = String(repeating: "x", count: 2 * 1024 * 1024)

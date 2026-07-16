@@ -796,6 +796,13 @@ public actor VaultStore {
     /// Exact match plus a trailing `/*` prefix glob (`/api/v4/*` matches
     /// `/api/v4/projects` and `/api/v4/`, but not `/api/v4`).
     static func pathMatch(pattern: String, path: String) -> Bool {
+        // Callers pass the percent-decoded URL path. Do not select a
+        // path-scoped credential for a request that a destination server may
+        // canonicalize outside that scope (for example `/api/../admin`).
+        guard !path.split(separator: "/", omittingEmptySubsequences: false)
+            .contains(where: { $0 == "." || $0 == ".." }) else {
+            return false
+        }
         if pattern.hasSuffix("/*") {
             return path.hasPrefix(String(pattern.dropLast()))
         }

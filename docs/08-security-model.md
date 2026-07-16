@@ -25,11 +25,11 @@ The decision model is defined in [14-trust-model.md](14-trust-model.md). This fi
 
 ### Prompt-injected agent
 
-- The agent receives results, not Sallyport-managed credential values.
+- Sallyport does not intentionally add managed credential values to agent results.
 - Host and path bindings limit where HTTP credentials are injected.
 - Per-call keys and MCP servers require confirmation for every use.
 - Sessions end on process exit, revoke, vault lock, or app exit.
-- Exact injected values and common credential formats are redacted from output.
+- Executor results and errors are bounded but are not inspected or rewritten.
 - Each intent is audited before the side effect.
 
 An approved or allowlisted agent can still misuse any non-per-call credential available to it. Approval identifies a process or operation, not intent.
@@ -39,9 +39,12 @@ An approved or allowlisted agent can still misuse any non-per-call credential av
 - Credentialed redirects are not followed.
 - HTTPS-to-HTTP and cross-host credential forwarding are blocked.
 - Cloud metadata targets are blocked. Private targets require an explicit credential binding.
-- Responses have size limits and output redaction.
+- Responses have size limits. Content within those limits is returned without inspection or rewriting.
 
-Current DNS validation and connection use separate resolution steps. A DNS rebind between them can bypass the address check. Pinning the validated address is roadmap work.
+Each logical HTTP, remote MCP, and OAuth request pins its complete validated A/AAAA snapshot through
+connection. The request-scoped transport dials only those numeric addresses while preserving the
+original hostname for Host, TLS SNI, and certificate verification. A later logical request performs
+a fresh lookup; redirects and transport retries cannot bypass the pinned set.
 
 ### Same-user process
 
@@ -72,10 +75,13 @@ A complete consistent rollback of the vault, journal, anchor, and external state
 - Secure Enclave protects private keys, not UI pixels or decrypted process memory.
 - Observe mode lets any identifiable local process use non-per-call credentials while the vault is unlocked.
 - Click approval can be rubber-stamped; Touch ID raises the bar but does not validate intent.
-- DLP is pattern and exact-value redaction, not general data-flow control.
+- HTTP, SSH, and MCP executor results are not inspected or rewritten and may contain credentials or
+  other sensitive data supplied by the target.
 - Caller-supplied commands, arguments, audit previews, and decrypted SSH recordings may contain sensitive data.
 - Sallyport does not control traffic sent outside its own tools.
-- A configured upstream MCP server is trusted for its tool catalog. Its output is redacted, but catalog text is passed through.
+- A configured upstream MCP server is a trusted credential recipient. Tool results, errors, and
+  authenticated catalog metadata are returned without content inspection or rewriting. Credential
+  values, arbitrary sensitive data, and untrusted tool descriptions can pass.
 - One local operator can approve harmful actions. Multi-party approval is roadmap work.
 
 Any claim stronger than these controls belongs in [10-roadmap.md](10-roadmap.md), not current product copy.

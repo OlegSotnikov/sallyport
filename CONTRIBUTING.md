@@ -7,7 +7,7 @@ commit.
 ## Accepted reports
 
 - **Bug reports and behavior questions:** open an [issue](../../issues). Include the app version
-  from About and, when relevant, redacted card or journal contents.
+  from About and, when relevant, card or journal excerpts after removing sensitive content yourself.
 - **Security findings:** do not open a public issue. Email **hello@sallyport.dev**.
   Reports are credited unless you request otherwise.
 - **Documentation corrections and design critique:** open an issue. The trust model

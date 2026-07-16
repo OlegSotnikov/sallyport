@@ -1,6 +1,7 @@
 package sshexec_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/sallyport/sallyport/internal/sshexec"
 	"github.com/sallyport/sallyport/internal/sshtest"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestExecOutputFloodIsBoundedCountedAndFlagged(t *testing.T) {
@@ -78,9 +80,29 @@ func TestExecUnauthorizedKeyFailsBeforeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ex := sshexec.New(fakeKeys{"fleet-key": keyPEM}, filepath.Join(t.TempDir(), "known_hosts"), 5*time.Second)
-	if _, err := ex.Exec(context.Background(), hostRef(srv, "accept-new"), "must-not-run", sshexec.Opts{}); err == nil || !strings.Contains(err.Error(), "handshake") {
+	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+	ex := sshexec.New(fakeKeys{"fleet-key": keyPEM}, knownHostsPath, 5*time.Second)
+	var recording bytes.Buffer
+	res, err := ex.Exec(context.Background(), hostRef(srv, "accept-new"), "must-not-run", sshexec.Opts{
+		RecordSink: &recording,
+	})
+	if err == nil || !strings.Contains(err.Error(), "handshake") {
 		t.Fatalf("unauthorized authentication error = %v", err)
+	}
+	if res == nil {
+		t.Fatal("unauthorized authentication must return best-effort evidence")
+	}
+	if want := ssh.FingerprintSHA256(srv.HostPublicKey()); res.HostKeyFP != want {
+		t.Fatalf("failed authentication host fingerprint = %q, want %q", res.HostKeyFP, want)
+	}
+	if res.NewHostKey {
+		t.Fatal("an unauthenticated peer must not be reported as a newly trusted host")
+	}
+	if recording.Len() == 0 {
+		t.Fatal("failed authentication recording evidence is empty")
+	}
+	if _, statErr := os.Stat(knownHostsPath); !os.IsNotExist(statErr) {
+		t.Fatalf("failed authentication mutated known_hosts: %v", statErr)
 	}
 	if commands := srv.ExecedCommands(); len(commands) != 0 {
 		t.Fatalf("unauthorized key ran commands: %v", commands)

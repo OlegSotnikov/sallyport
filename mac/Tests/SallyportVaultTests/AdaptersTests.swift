@@ -9,7 +9,7 @@ struct AdaptersTests {
 
     /// A cache no test here ever lets reach the network.
     private func dummyOAuth() -> OAuth2TokenCache {
-        OAuth2TokenCache(session: URLSession(configuration: .ephemeral),
+        OAuth2TokenCache(transport: PinnedHTTPTransport(configuration: .ephemeral),
                          timeout: 1, netGuard: NetGuard())
     }
 
@@ -94,11 +94,10 @@ struct AdaptersTests {
     @Test("bearer: default Authorization header and {secret} format template")
     func bearerAdapter() async throws {
         var req = URLRequest(url: URL(string: "https://api.example.com/x")!)
-        let injected = try await Adapters.inject(
+        try await Adapters.inject(
             cred(adapter: "bearer", secret: "tok_123"),
             into: &req, body: Data(), oauth: dummyOAuth())
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Bearer tok_123")
-        #expect(injected == [Data("tok_123".utf8)])
 
         var req2 = URLRequest(url: URL(string: "https://api.example.com/x")!)
         _ = try await Adapters.inject(
@@ -115,22 +114,19 @@ struct AdaptersTests {
                                           into: &r, body: Data(), oauth: dummyOAuth())
         }
         var req = URLRequest(url: URL(string: "https://api.example.com/x")!)
-        let injected = try await Adapters.inject(
+        try await Adapters.inject(
             cred(adapter: "header", header: "X-Api-Key", secret: "cfat_abc"),
             into: &req, body: Data(), oauth: dummyOAuth())
         #expect(req.value(forHTTPHeaderField: "X-Api-Key") == "cfat_abc")
-        #expect(injected == [Data("cfat_abc".utf8)])
     }
 
-    @Test("basic: RFC 7617 base64; BOTH raw and wire forms are captured for redaction")
+    @Test("basic: RFC 7617 base64")
     func basicAdapter() async throws {
         var req = URLRequest(url: URL(string: "https://api.example.com/x")!)
-        let injected = try await Adapters.inject(
+        try await Adapters.inject(
             cred(adapter: "basic", secret: "user:pass"),
             into: &req, body: Data(), oauth: dummyOAuth())
         #expect(req.value(forHTTPHeaderField: "Authorization") == "Basic dXNlcjpwYXNz")
-        // The base64 wire form would evade an exact-match scrub of the raw secret.
-        #expect(injected == [Data("user:pass".utf8), Data("dXNlcjpwYXNz".utf8)])
     }
 
     @Test("aws-sigv4: secret must be ACCESS_KEY_ID:SECRET_ACCESS_KEY; HMAC never echoes")
@@ -146,15 +142,12 @@ struct AdaptersTests {
         }
         var req = URLRequest(url: URL(string: "https://s3.amazonaws.com/bucket/key")!)
         req.httpMethod = "GET"
-        let injected = try await Adapters.inject(
+        try await Adapters.inject(
             cred(adapter: "aws-sigv4",
                  params: ["region": "us-east-1", "service": "s3"], secret: "AKID:SECRET"),
             into: &req, body: Data(), oauth: dummyOAuth())
         let auth = try #require(req.value(forHTTPHeaderField: "Authorization"))
         #expect(auth.hasPrefix("AWS4-HMAC-SHA256 "))
-        // The signature is a keyed HMAC — the secret key never appears verbatim,
-        // so there is nothing to capture for redaction.
-        #expect(injected.isEmpty)
         #expect(!auth.contains("SECRET"))
     }
 

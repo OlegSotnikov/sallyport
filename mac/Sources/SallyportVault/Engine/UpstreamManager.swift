@@ -19,14 +19,13 @@ public enum UpstreamError: Error, CustomStringConvertible, Sendable {
     }
 }
 
-/// Local or remote MCP connection. It returns injected values with each response
-/// so the engine can redact any echoed credentials.
+/// Local or remote MCP connection.
 protocol MCPConnection: AnyObject, Sendable {
     var isAlive: Bool { get }
     func start(timeout: TimeInterval) async throws
     func listTools(timeout: TimeInterval) async throws -> [JSONValue]
     func callTool(_ tool: String, arguments: [String: JSONValue],
-                  timeout: TimeInterval) async throws -> (output: [String: JSONValue], injected: [Data])
+                  timeout: TimeInterval) async throws -> [String: JSONValue]
     func terminate()
 }
 
@@ -40,17 +39,19 @@ public final class UpstreamManager: @unchecked Sendable {
     static let callTimeout: TimeInterval = 120
     /// Handshake ceiling (npx/uvx cold starts are slow, but not minutes).
     static let startTimeout: TimeInterval = 45
+    /// A single documentation field must not dominate an MCP catalog frame.
+    static let toolDescriptionMaxUTF8Bytes = 4 * 1_024
 
     private let store: VaultStore
     private let netGuard = NetGuard()
-    /// Cookie-free client that refuses redirects for OAuth requests.
-    private let oauthSession: URLSession = {
+    /// Cookie-free, request-pinned transport for OAuth requests.
+    private let oauthTransport: PinnedHTTPTransport = {
         let c = URLSessionConfiguration.ephemeral
         c.httpShouldSetCookies = false
         c.httpCookieAcceptPolicy = .never
         c.urlCache = nil
         c.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: c, delegate: RefuseRedirects.shared, delegateQueue: nil)
+        return PinnedHTTPTransport(configuration: c)
     }()
     private let lock = NSLock()
     private var connections: [String: any MCPConnection] = [:]
@@ -144,6 +145,31 @@ public final class UpstreamManager: @unchecked Sendable {
 
     // MARK: - Catalog
 
+    /// Bounds documentation-only strings supplied by an upstream. Schema
+    /// structure and executable tool names remain unchanged.
+    static func boundedToolDescriptions(_ value: JSONValue) -> JSONValue {
+        switch value {
+        case .array(let values):
+            return .array(values.map(Self.boundedToolDescriptions))
+        case .object(let values):
+            var bounded: [String: JSONValue] = [:]
+            bounded.reserveCapacity(values.count)
+            for (key, child) in values {
+                if key == "description", case .string(let text) = child {
+                    bounded[key] = .string(Engine.clippedPrefix(
+                        text, maxUTF8Bytes: Self.toolDescriptionMaxUTF8Bytes))
+                } else {
+                    bounded[key] = Self.boundedToolDescriptions(child)
+                }
+            }
+            return .object(bounded)
+        case .string(let text):
+            return .string(text)
+        default:
+            return value
+        }
+    }
+
     /// Namespaced tool definitions from running upstreams.
     public func namespacedToolDefs() -> [JSONValue] {
         let cache = lock.withLock { toolCache }
@@ -160,11 +186,9 @@ public final class UpstreamManager: @unchecked Sendable {
 
     // MARK: - Calls
 
-    /// Forward one ladder-approved call. Returns the upstream's result object
-    /// plus the exact secret values injected into that upstream's environment,
-    /// so the engine can DLP-scrub any echo of them out of the output.
+    /// Forward one ladder-approved call and return the upstream's result object.
     public func call(entry: UpstreamsStore.Entry, tool: String,
-                     args: [String: JSONValue]) async throws -> (output: [String: JSONValue], injected: [Data]) {
+                     args: [String: JSONValue]) async throws -> [String: JSONValue] {
         // Use a one-shot stdio child when its environment carries a per-call key.
         if entry.transport == UpstreamsStore.Entry.stdioTransport, await hasPerCallKey(entry) {
             if await store.locked() { throw VaultStoreError.locked }
@@ -214,6 +238,7 @@ public final class UpstreamManager: @unchecked Sendable {
         do {
             try await conn.start(timeout: Self.startTimeout)
             let tools = try await conn.listTools(timeout: Self.startTimeout)
+                .map(Self.boundedToolDescriptions)
             // Do not register a connection that finished after lock.
             if await store.locked() {
                 conn.terminate()
@@ -269,15 +294,15 @@ public final class UpstreamManager: @unchecked Sendable {
 
         // Resolve stdio environment keys immediately before spawning.
         var env = entry.env
-        var injected: [Data] = []
         for binding in entry.keys {
-            let value = try await store.secretValue(name: binding.secret)
-            env[binding.envVar] = String(decoding: value, as: UTF8.self)
-            injected.append(value)
+            var value = try await store.secretValue(name: binding.secret)
+            defer { value.resetBytes(in: 0..<value.count) }
+            let environmentValue = String(decoding: value, as: UTF8.self)
+            env[binding.envVar] = environmentValue
         }
         return try StdioMCPConnection(
             name: entry.name, command: entry.command, args: entry.args,
-            extraEnv: env, injected: injected,
+            extraEnv: env,
             onExit: { [weak self] name in
                 guard let self else { return }
                 self.lock.withLock {
@@ -341,7 +366,7 @@ public final class UpstreamManager: @unchecked Sendable {
 
         let existing = try await grant(upstream: entry.name)
         let allowPrivate = MCPOAuth.allowsPrivate(endpoint: endpoint)
-        let meta = try await MCPOAuth.discover(endpoint: endpoint, session: oauthSession,
+        let meta = try await MCPOAuth.discover(endpoint: endpoint, transport: oauthTransport,
                                                netGuard: netGuard, timeout: 30)
 
         // Reuse a registered redirect port when available.
@@ -354,14 +379,14 @@ public final class UpstreamManager: @unchecked Sendable {
         var clientSecret = existing?.clientSecret ?? ""
         if clientID.isEmpty || existing?.redirectURI != redirectURI {
             let registered = try await MCPOAuth.register(metadata: meta, redirectURI: redirectURI,
-                                                         session: oauthSession, netGuard: netGuard,
+                                                         transport: oauthTransport, netGuard: netGuard,
                                                          allowPrivate: allowPrivate, timeout: 30)
             clientID = registered.id
             clientSecret = registered.secret
         }
 
-        let pkce = MCPOAuth.PKCE()
-        let state = MCPOAuth.randomState()
+        let pkce = try MCPOAuth.PKCE()
+        let state = try MCPOAuth.randomState()
         let resource = endpoint.absoluteString
         let scopes: String
         if let existing, !existing.scopes.isEmpty {
@@ -384,7 +409,8 @@ public final class UpstreamManager: @unchecked Sendable {
         let token = try await MCPOAuth.exchange(
             code: callback.code, metadata: meta, clientID: clientID, clientSecret: clientSecret,
             redirectURI: redirectURI, resource: resource, verifier: pkce.verifier,
-            session: oauthSession, netGuard: netGuard, allowPrivate: allowPrivate, timeout: 30)
+            transport: oauthTransport, netGuard: netGuard,
+            allowPrivate: allowPrivate, timeout: 30)
 
         // Do not store tokens if the vault locked during browser sign-in.
         if await store.locked() { throw VaultStoreError.locked }
@@ -429,7 +455,7 @@ public final class UpstreamManager: @unchecked Sendable {
         if g.isFresh() { return g.accessToken }
         let refreshed: (access: String, refresh: String, expiry: Date, scopes: String)
         do {
-            refreshed = try await MCPOAuth.refresh(grant: g, session: oauthSession,
+            refreshed = try await MCPOAuth.refresh(grant: g, transport: oauthTransport,
                                                    netGuard: netGuard, timeout: 30)
         } catch MCPOAuth.OAuthError.grantRevoked {
             // Clear a permanently rejected refresh token so the UI can reconnect.
@@ -533,16 +559,13 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
     private var requestIDs = JSONRPCRequestIDSequence()
     private var pending: [String: CheckedContinuation<[String: JSONValue], any Error>] = [:]
     private var terminated = false
-    /// Environment values retained for response redaction and cleared on termination.
-    private var injected: [Data]
 
     var isAlive: Bool { process.isRunning }
 
     init(name: String, command: String, args: [String], extraEnv: [String: String],
-         injected: [Data], onExit: @escaping @Sendable (String) -> Void) throws {
+         onExit: @escaping @Sendable (String) -> Void) throws {
         self.name = name
         self.onExit = onExit
-        self.injected = injected
 
         let proc = Process()
         // `/usr/bin/env` resolves bare command names ("npx", "uvx") through
@@ -607,19 +630,17 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
         try notify(method: "notifications/initialized", timeout: timeout)
     }
 
-    /// The upstream's raw tool catalog.
+    /// The upstream tool catalog.
     func listTools(timeout: TimeInterval) async throws -> [JSONValue] {
         let result = try await request(method: "tools/list", params: [:], timeout: timeout)
-        if case let .array(tools)? = result["tools"] { return tools }
-        return []
+        guard case let .array(tools)? = result["tools"] else { return [] }
+        return tools
     }
 
     /// One proxied tools/call. Returns the whole MCP result object
-    /// (`content`, `isError`, and related fields) as engine output, plus copies of the env-injected
-    /// secret values for post-call DLP scrubbing (the engine zeroizes ITS
-    /// copies after redaction; ours live until terminate).
+    /// (`content`, `isError`, and related fields) as engine output.
     func callTool(_ tool: String, arguments: [String: JSONValue],
-                  timeout: TimeInterval) async throws -> (output: [String: JSONValue], injected: [Data]) {
+                  timeout: TimeInterval) async throws -> [String: JSONValue] {
         guard let boundedArguments = try JSONValue.object(arguments).boundedFoundation()
                 as? [String: Any] else {
             throw UpstreamError.protocolError(name, "arguments exceed JSON resource limits")
@@ -628,11 +649,10 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
             "name": tool,
             "arguments": boundedArguments,
         ], timeout: timeout)
-        return (result, lock.withLock { injected.map { Data($0) } })
+        return result
     }
 
-    /// SIGTERM, then SIGKILL after a short grace. Zeroizes the retained
-    /// injected values and fails every in-flight call.
+    /// SIGTERM, then SIGKILL after a short grace, and fail every in-flight call.
     func terminate() {
         let alreadyDone: Bool = lock.withLock {
             defer { terminated = true }
@@ -640,10 +660,6 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
         }
         guard !alreadyDone else { return }
         failAllPending(UpstreamError.down(name))
-        lock.withLock {
-            for i in injected.indices { injected[i].resetBytes(in: 0..<injected[i].count) }
-            injected.removeAll()
-        }
         stdoutHandle.readabilityHandler = nil
         guard process.isRunning else { return }
         process.terminate()
@@ -765,8 +781,7 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
                       let cont = pending.removeValue(forKey: id) else { continue }
                 if let error = obj["error"] as? [String: Any] {
                     let msg = (error["message"] as? String) ?? "unknown JSON-RPC error"
-                    // Scrub directly because this block already holds `lock`.
-                    completed.append((cont, .failure(UpstreamError.protocolError(name, Self.scrubAgainst(msg, secrets: injected)))))
+                    completed.append((cont, .failure(UpstreamError.protocolError(name, msg))))
                 } else if let result = obj["result"] as? [String: Any] {
                     do {
                         completed.append((cont, .success(
@@ -808,19 +823,6 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
         }
     }
 
-    /// Scrub a server-provided string against known-injected secrets (exact) plus
-    /// generic shapes. Static and lock-free so it is safe to call while holding
-    /// a connection's lock.
-    static func scrubAgainst(_ text: String, secrets: [Data]) -> String {
-        var data = Data(text.utf8)
-        if !secrets.isEmpty { (data, _) = DLP.redactWith(data, secrets: secrets) }
-        let (out, _) = DLP.redact(data)
-        return String(decoding: out, as: UTF8.self)
-    }
-    static func scrubAgainst(_ text: String, injected: [Data]) -> String {
-        scrubAgainst(text, secrets: injected)
-    }
-
     private func failAllPending(_ error: any Error) {
         let conts: [CheckedContinuation<[String: JSONValue], any Error>] = lock.withLock {
             let c = Array(pending.values)
@@ -836,7 +838,7 @@ final class StdioMCPConnection: MCPConnection, @unchecked Sendable {
 /// Remote MCP connection using JSON-RPC over streamable HTTP. It accepts JSON or
 /// SSE responses and carries `Mcp-Session-Id` after initialization. Credentials
 /// are resolved per request. Redirects and cloud metadata addresses are refused.
-final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate, @unchecked Sendable {
+final class RemoteMCPConnection: NSObject, MCPConnection, @unchecked Sendable {
 
     /// Maximum response-body size.
     private static let maxBodyBytes = 8 * 1024 * 1024
@@ -848,7 +850,7 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
     /// OAuth auth: a valid access token (refreshed + re-sealed as needed).
     private let bearer: (@Sendable () async throws -> String)?
     private let netGuard = NetGuard()
-    private var session: URLSession?
+    private let transport: PinnedHTTPTransport
     private let oauth: OAuth2TokenCache
 
     private let lock = NSLock()
@@ -870,13 +872,10 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
         config.httpCookieAcceptPolicy = .never
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        let bootstrap = URLSession(configuration: config)
-        self.oauth = OAuth2TokenCache(session: bootstrap, timeout: 30, netGuard: netGuard)
+        let transport = PinnedHTTPTransport(configuration: config)
+        self.transport = transport
+        self.oauth = OAuth2TokenCache(transport: transport, timeout: 30, netGuard: netGuard)
         super.init()
-        // Assigned only after NSObject initialization, before `self` escapes.
-        // Optional (not IUO): every later use fails closed if construction or
-        // lifecycle ever leaves the transport unavailable.
-        self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
     var isAlive: Bool { lock.withLock { !dead } }
@@ -886,22 +885,13 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
             dead = true
             sessionID = nil
         }
-        let activeSession = lock.withLock { session }
-        activeSession?.invalidateAndCancel()
-    }
-
-    /// Refuses all redirects.
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest,
-                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        completionHandler(nil)
+        transport.shutdown()
     }
 
     // MARK: MCP surface
 
     func start(timeout: TimeInterval) async throws {
-        let (result, _) = try await rpc(method: "initialize", params: [
+        let result = try await rpc(method: "initialize", params: [
             "protocolVersion": "2025-03-26",
             "capabilities": [:] as [String: Any],
             "clientInfo": ["name": "sallyport", "version": "1.0"],
@@ -909,37 +899,38 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
         if let negotiated = result["protocolVersion"]?.stringValue {
             lock.withLock { protocolVersion = negotiated }
         }
-        _ = try await rpc(method: "notifications/initialized", params: [:],
-                          isNotification: true, timeout: timeout)
+        _ = try await rpc(
+            method: "notifications/initialized", params: [:],
+            isNotification: true, timeout: timeout)
     }
 
     func listTools(timeout: TimeInterval) async throws -> [JSONValue] {
-        let (result, _) = try await rpc(method: "tools/list", params: [:], timeout: timeout)
-        if case let .array(tools)? = result["tools"] { return tools }
-        return []
+        let result = try await rpc(
+            method: "tools/list", params: [:], timeout: timeout)
+        guard case let .array(tools)? = result["tools"] else { return [] }
+        return tools
     }
 
     func callTool(_ tool: String, arguments: [String: JSONValue],
-                  timeout: TimeInterval) async throws -> (output: [String: JSONValue], injected: [Data]) {
+                  timeout: TimeInterval) async throws -> [String: JSONValue] {
         guard let boundedArguments = try JSONValue.object(arguments).boundedFoundation()
                 as? [String: Any] else {
             throw UpstreamError.protocolError(name, "arguments exceed JSON resource limits")
         }
-        let (result, injected) = try await rpc(method: "tools/call", params: [
+        return try await rpc(method: "tools/call", params: [
             "name": tool,
             "arguments": boundedArguments,
         ], timeout: timeout)
-        return (result, injected)
     }
 
     // MARK: JSON-RPC over streamable HTTP
 
     private func rpc(method: String, params: [String: Any], isNotification: Bool = false,
-                     timeout: TimeInterval) async throws -> (result: [String: JSONValue], injected: [Data]) {
+                     timeout: TimeInterval) async throws -> [String: JSONValue] {
         guard isAlive else { throw UpstreamError.down(name) }
         // Treat the configured endpoint as bound intent for private ranges while
         // keeping metadata and link-local addresses blocked.
-        try netGuard.validate(host: endpoint.host ?? "", bound: true)
+        let destination = try netGuard.destination(for: endpoint, bound: true)
 
         var frame: [String: Any] = ["jsonrpc": "2.0", "method": method, "params": params]
         var id = ""
@@ -968,13 +959,17 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
         if let ver { request.setValue(ver, forHTTPHeaderField: "MCP-Protocol-Version") }
 
         // Attach an OAuth token or host-bound vault credential.
-        var injected: [Data] = []
         if let bearer {
             let token = try await bearer()
             request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-            injected = [Data(token.utf8)]
-        } else if let resolveCred, let cred = try await resolveCred() {
-            injected = try await Adapters.inject(cred, into: &request, body: body, oauth: oauth)
+        } else if let resolveCred, var cred = try await resolveCred() {
+            // Wipe the resolved vault copy as soon as the request owns its
+            // credential header, including when adapter injection throws.
+            defer { cred.secret.zeroize() }
+            try await Adapters.inject(cred, into: &request, body: body, oauth: oauth)
+        }
+        guard isAlive else {
+            throw UpstreamError.down(name)
         }
 
         let finalRequest = request
@@ -982,12 +977,20 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
         let policy = RedirectPolicy(origin: endpoint.hostPort,
                                     originScheme: endpoint.scheme?.lowercased() ?? "https",
                                     hasCredential: true, maxBody: Self.maxBodyBytes)
-        guard let activeSession = lock.withLock({ session }) else {
-            throw UpstreamError.down(name)
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            (data, http) = try await withTimeout(timeout, upstream: name) {
+                try await self.transport.loadCapped(
+                    request: finalRequest, destination: destination, policy: policy,
+                    hardTimeout: timeout)
+            }
+        } catch {
+            if !isAlive { throw UpstreamError.down(name) }
+            throw error
         }
-        let (data, http) = try await withTimeout(timeout, upstream: name) {
-            try await policy.loadCapped(request: finalRequest, session: activeSession,
-                                        hardTimeout: timeout)
+        guard isAlive else {
+            throw UpstreamError.down(name)
         }
         // Store the session ID. A 404 after initialization forces reconnection.
         if let sid = http.value(forHTTPHeaderField: "Mcp-Session-Id") {
@@ -1004,7 +1007,7 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
             throw UpstreamError.protocolError(name, "oversized reply")
         }
         if isNotification || data.isEmpty {
-            return ([:], injected)
+            return [:]
         }
 
         let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
@@ -1019,13 +1022,13 @@ final class RemoteMCPConnection: NSObject, MCPConnection, URLSessionTaskDelegate
         }
         if let error = message["error"] as? [String: Any] {
             let msg = (error["message"] as? String) ?? "unknown JSON-RPC error"
-            throw UpstreamError.protocolError(name, StdioMCPConnection.scrubAgainst(msg, injected: injected))
+            throw UpstreamError.protocolError(name, msg)
         }
         guard let result = message["result"] as? [String: Any] else {
             throw UpstreamError.protocolError(name, "malformed reply")
         }
         do {
-            return (try JSONValue.boundedObject(fromFoundation: result), injected)
+            return try JSONValue.boundedObject(fromFoundation: result)
         } catch {
             throw UpstreamError.protocolError(name, "reply exceeds JSON resource limits")
         }
@@ -1066,16 +1069,5 @@ func withTimeout<T: Sendable>(_ seconds: TimeInterval, upstream: String,
             throw UpstreamError.timeout(upstream)
         }
         return first
-    }
-}
-
-/// Stateless URLSession delegate that refuses redirects.
-final class RefuseRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    static let shared = RefuseRedirects()
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest,
-                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-        completionHandler(nil)
     }
 }

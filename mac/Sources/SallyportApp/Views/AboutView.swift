@@ -62,7 +62,7 @@ struct AboutView: View {
                     .buttonStyle(.bordered)
                     .disabled(updater?.canCheck != true)
 
-                Text("Stores credentials and uses them for configured agent actions without returning them to the agent.")
+                Text("Uses vault credentials for configured actions without exposing the vault to the agent. Target responses are returned without content filtering.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

@@ -66,4 +66,4 @@ Session approval is the default because it asks once per process run. Per-call a
 
 Approval identifies a process or one operation, not intent. An approved process can misuse any non-per-call credential available through Sallyport. Click approval can be automated through UI access; Touch ID raises the bar but does not protect decrypted memory or UI pixels from native code running as the user.
 
-Approval decisions are ordinary in-process outcomes. A separate Secure Enclave audit signer signs audit rows and the integrity anchor. See [06-audit-dlp.md](06-audit-dlp.md) for journal details and [08-security-model.md](08-security-model.md) for residual risk.
+Approval decisions are ordinary in-process outcomes. A separate Secure Enclave audit signer signs audit rows and the integrity anchor. See [06-audit.md](06-audit.md) for journal details and [08-security-model.md](08-security-model.md) for residual risk.

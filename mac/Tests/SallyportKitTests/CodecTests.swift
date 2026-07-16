@@ -12,7 +12,8 @@ struct CodecTests {
         let json = """
         {"type":"approval_request","id":"req-1","action":{"channel":"http","tool":"http.request",\
         "summary":"POST https://api.cloudflare.com/... (mutating)","host":"api.cloudflare.com",\
-        "argsPreview":{"method":"POST","path":"/zones"},"bodyPreview":"{}","dangerTokens":["POST"]},\
+        "argsPreview":{"method":"POST","path":"/zones"},"bodyPreview":"{}","bodyByteCount":2,\
+        "bodyPreviewTruncated":false,"dangerTokens":["POST"]},\
         "why":{"rule":"http-mutating","reason":"bound cred"},\
         "provenance":{"origin":{"pid":4321,"name":"claude","appName":"Claude Code",\
         "path":"/x","validSignature":true},"chain":[{"pid":4321,"name":"claude","path":"/x","ppid":10}],\
@@ -28,6 +29,9 @@ struct CodecTests {
         #expect(action.host == "api.cloudflare.com")
         #expect(action.dangerTokens == ["POST"])
         #expect(action.argsPreview?.objectValue?["method"]?.stringValue == "POST")
+        #expect(action.bodyPreview == "{}")
+        #expect(action.bodyByteCount == 2)
+        #expect(!action.bodyPreviewTruncated)
         #expect(why.rule == "http-mutating")
         #expect(provenance.origin.appName == "Claude Code")
         #expect(provenance.chain.count == 1)
@@ -46,6 +50,8 @@ struct CodecTests {
             Issue.record("wrong case"); return
         }
         #expect(action.dangerTokens == [])
+        #expect(action.bodyByteCount == nil)
+        #expect(!action.bodyPreviewTruncated)
     }
 
     @Test("approval_request tolerates a null provenance chain (Go nil slice → JSON null)")

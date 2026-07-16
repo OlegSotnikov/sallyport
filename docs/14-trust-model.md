@@ -5,7 +5,9 @@ This is the source of truth for local authorization. Other documents must not de
 ## Guarantees
 
 - A locked, unlocking, or quarantined vault does not execute agent tools or expose sealed metadata.
-- Sallyport-managed credential values do not enter agent results, approval payloads, audit events, logs, or errors.
+- Sallyport does not intentionally put managed credential values into agent results, approval
+  payloads, audit events, logs, or errors. Executor results are not inspected or rewritten and may
+  contain sensitive data supplied by the target or upstream server.
 - Approvals resolve inside `Sallyport.app`. They are not signed grants.
 - Every side effect requires a durable audit intent row first.
 - Locking clears the DEK, live sessions, pending approvals, credential requests, and stdio MCP processes.
@@ -59,7 +61,7 @@ An allowlist entry is either:
 - an exact code-directory hash, which stops matching after a binary update;
 - a publisher requirement based on signing identity, which can survive updates.
 
-Entries may be scoped to hosts. Sallyport matches them against the live process on each call. A match skips only the session card. It does not bypass vault state, host binding, per-call approval, audit, output redaction, or lifecycle checks.
+Entries may be scoped to hosts. Sallyport matches them against the live process on each call. A match skips only the session card. It does not bypass vault state, host binding, per-call approval, audit, or lifecycle checks.
 
 Adding or removing an allowlist entry always requires Touch ID. The allowlist is sealed under the DEK.
 
@@ -78,7 +80,7 @@ Every `http.request`, `ssh.exec`, `sallyport.request_credential`, and proxied MC
 6. sessionAuth is click or touchid        -> ask
 7. sessionAuth is off                     -> run as observed
 8. write audit intent                     -> deny if it fails
-9. execute, redact output, attempt result row
+9. execute, attempt result row, return the bounded executor result
 ```
 
 An unidentifiable process is denied while session approval is enabled. Observe mode may run it without a card and records what identity is available.
@@ -128,7 +130,9 @@ The external anchor binds the journal head, configuration generation, and trust-
 
 A complete consistent rollback of all local state can resemble restoration from backup. Detecting that requires an off-device witness.
 
-SSH recordings are encrypted separately under a DEK-derived key. The helper applies fixed-pattern redaction before sealing, but decrypted recordings may still contain sensitive session data.
+SSH recordings are encrypted separately under a DEK-derived key. SSH output and recordings are
+preserved without content inspection; returned output and decrypted recordings may contain sensitive
+session data.
 
 ## Security limits
 
@@ -138,8 +142,13 @@ SSH recordings are encrypted separately under a DEK-derived key. The helper appl
 - Secure Enclave protects private keys, not UI pixels or decrypted process memory.
 - Root, disabled SIP, or code execution inside Sallyport can control an unlocked vault.
 - Same-user malware can inspect credentials passed to local stdio MCP servers through their environment.
-- Current DNS checks do not pin the validated address through connection, leaving a rebinding gap.
-- DLP masks exact injected values and known credential formats; it is not general data-flow tracking.
+- HTTP, remote MCP, and OAuth pin each validated DNS snapshot through connection; a later logical
+  request performs a fresh lookup.
+- HTTP, SSH, and MCP results and errors are not inspected or rewritten and may contain credentials or
+  other sensitive target-supplied data.
+- Authenticated MCP catalog metadata is arbitrary upstream-controlled content outside the invocation
+  ladder and is returned without content inspection.
+- HTTP, SSH, and MCP targets are trusted credential recipients for credentials Sallyport sends them.
 - Sallyport cannot govern traffic sent outside its tools.
 - The local operator can approve harmful actions. Multi-party approval is not implemented.
 

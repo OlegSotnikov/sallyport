@@ -2,18 +2,15 @@ import Foundation
 import CryptoKit
 
 /// Credential-injection adapters for the HTTP executor.
-/// Each adapter returns the injected values so the engine can redact them from
-/// the response and then zeroize them.
 enum Adapters {
 
-    /// Attaches `cred` to `request` according to its adapter and returns the
-    /// value(s) actually placed on the wire. `body` is the raw request payload
-    /// (needed by signing adapters like aws-sigv4); the oauth2 adapter performs
-    /// a (guarded) token fetch through `oauth`.
+    /// Attaches `cred` to `request` according to its adapter. `body` is the raw
+    /// request payload (needed by signing adapters like aws-sigv4); the oauth2
+    /// adapter performs a guarded token fetch through `oauth`.
     static func inject(_ cred: Cred, into request: inout URLRequest, body: Data,
-                       oauth: OAuth2TokenCache) async throws -> [Data] {
-        // HTTP credentials become header material (or HMAC inputs), never bulk
-        // payloads. Bound their plaintext before any String/base64 copies.
+                       oauth: OAuth2TokenCache) async throws {
+        // HTTP credentials become header material or HMAC inputs rather than
+        // request payloads. Bound their plaintext before String/base64 copies.
         guard cred.secret.count <= 64 * 1024 else { throw HTTPExecError.invalidHeaders }
         let secret = String(decoding: cred.secret, as: UTF8.self)
         switch cred.inject.adapter {
@@ -24,7 +21,6 @@ enum Adapters {
                 value = cred.inject.format.replacingOccurrences(of: "{secret}", with: secret)
             }
             try setHeader(value, name: header, request: &request)
-            return [Data(secret.utf8)]
 
         case "header":
             guard !cred.inject.header.isEmpty else { throw HTTPExecError.headerAdapterNeedsName }
@@ -33,14 +29,12 @@ enum Adapters {
                 value = cred.inject.format.replacingOccurrences(of: "{secret}", with: secret)
             }
             try setHeader(value, name: cred.inject.header, request: &request)
-            return [Data(secret.utf8)]
 
         case "basic":
             // secret is "user:pass"; RFC 7617 base64.
             let header = orDefault(cred.inject.header, "Authorization")
             let enc = basicEncode(secret)
             try setHeader("Basic " + enc, name: header, request: &request)
-            return [Data(secret.utf8), Data(enc.utf8)]
 
         case "aws-sigv4":
             // secret is "ACCESS_KEY_ID:SECRET_ACCESS_KEY"; params carry region+service.
@@ -52,9 +46,6 @@ enum Adapters {
                           region: cred.inject.params["region"] ?? "",
                           service: cred.inject.params["service"] ?? "",
                           body: body, now: Date())
-            // The signature is a keyed HMAC, so the secret key does not appear
-            // verbatim, so there is nothing in the request to redact from an echo.
-            return []
 
         case "oauth2":
             let p = cred.inject.params
@@ -64,9 +55,6 @@ enum Adapters {
                                             scope: p["scope"] ?? "")
             let header = orDefault(cred.inject.header, "Authorization")
             try setHeader("Bearer " + tok, name: header, request: &request)
-            // Redact the fetched access token (not the client secret, which
-            // never went on this request) from any response echo.
-            return [Data(tok.utf8)]
 
         default:
             throw HTTPExecError.unknownAdapter(cred.inject.adapter)
@@ -227,15 +215,15 @@ actor OAuth2TokenCache {
         var expiry: Date
     }
 
-    private let session: URLSession
+    private let transport: PinnedHTTPTransport
     private let timeout: TimeInterval
     private let netGuard: NetGuard
     private let now: @Sendable () -> Date
     private var tokens: [String: Token] = [:]
 
-    init(session: URLSession, timeout: TimeInterval, netGuard: NetGuard,
+    init(transport: PinnedHTTPTransport, timeout: TimeInterval, netGuard: NetGuard,
          now: @escaping @Sendable () -> Date = { Date() }) {
-        self.session = session
+        self.transport = transport
         self.timeout = timeout
         self.netGuard = netGuard
         self.now = now
@@ -279,7 +267,7 @@ actor OAuth2TokenCache {
             throw HTTPExecError.oauth2BadTokenURL
         }
         // Token requests use the network guard without a private-host binding.
-        try netGuard.validate(host: url.host(percentEncoded: false) ?? "", bound: false)
+        let destination = try netGuard.destination(for: url, bound: false)
 
         var form = "grant_type=client_credentials"
         if !scope.isEmpty { form += "&scope=" + queryEscape(scope) }
@@ -301,8 +289,9 @@ actor OAuth2TokenCache {
         let policy = RedirectPolicy(origin: url.hostPort,
                                     originScheme: url.scheme?.lowercased() ?? "",
                                     hasCredential: true, maxBody: 1 << 20)
-        let (raw, http) = try await policy.loadCapped(
-            request: req, session: session, hardTimeout: timeout)
+        let (raw, http) = try await transport.loadCapped(
+            request: req, destination: destination, policy: policy,
+            hardTimeout: timeout)
         guard http.statusCode == 200 else {
             throw HTTPExecError.oauth2TokenEndpointStatus(http.statusCode)
         }

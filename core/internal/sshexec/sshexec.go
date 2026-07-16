@@ -53,23 +53,22 @@ type Opts struct {
 	RecordPath string        // asciicast file target; "" disables (tests/dev only)
 	// RecordSink writes the asciicast to memory instead of RecordPath.
 	RecordSink      io.Writer
-	Redactor        Redactor                       // DLP applied to output + recording
 	OnHostKeyAccept func(addr, fingerprint string) // audited TOFU acceptance hook
 	// Signer bypasses private-key resolution. Production supplies the app-backed
 	// signer over an inherited socket.
 	Signer ssh.Signer
 }
 
-// Result is the outcome of one ssh.exec. Stdout/Stderr are already DLP-redacted.
+// Result is the outcome of one ssh.exec. Stdout and Stderr preserve the remote
+// command's retained bytes without credential-pattern filtering.
 type Result struct {
 	Stdout     []byte
 	Stderr     []byte
 	ExitCode   int
-	BytesOut   int  // raw stdout+stderr byte count (pre-redaction length)
+	BytesOut   int  // total drained stdout+stderr byte count before retention truncation
 	Truncated  bool // true when output exceeded the bounded retention budget
 	Duration   time.Duration
 	Recording  string // path to the .cast file, or ""
-	Redactions int
 	HostKeyFP  string // SHA256 fingerprint of the host key that authenticated the server
 	NewHostKey bool   // true when this connect TOFU-accepted a previously unknown host
 }
@@ -91,7 +90,7 @@ func New(keys KeyResolver, knownHostsPath string, timeout time.Duration) *Execut
 }
 
 // Exec resolves the key, dials the host under the configured host-key policy,
-// runs cmd, records the session, and returns redacted output.
+// runs cmd, records the session, and returns its retained output.
 func (e *Executor) Exec(ctx context.Context, ref HostRef, cmd string, opts Opts) (*Result, error) {
 	if ref.HostKey == "" {
 		ref.HostKey = hostKeyAcceptNew
@@ -135,15 +134,17 @@ func (e *Executor) Exec(ctx context.Context, ref HostRef, cmd string, opts Opts)
 	var rec *cast
 	switch {
 	case opts.RecordSink != nil:
-		rec, err = newCastWriter(opts.RecordSink, 80, 24, opts.Redactor)
+		rec, err = newCastWriter(opts.RecordSink, 80, 24)
 	case opts.RecordPath != "":
-		rec, err = newCast(opts.RecordPath, 80, 24, opts.Redactor)
+		rec, err = newCast(opts.RecordPath, 80, 24)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sshexec: open recording (fail-closed): %w", err)
 	}
 	if rec != nil {
-		rec.event("i", []byte(commandLine(cmd)))
+		if eventErr := rec.event("i", []byte(commandLine(cmd))); eventErr != nil {
+			return nil, fmt.Errorf("sshexec: initialize recording (fail-closed): %w", errors.Join(eventErr, rec.close()))
+		}
 	}
 
 	res := &Result{}
@@ -151,18 +152,12 @@ func (e *Executor) Exec(ctx context.Context, ref HostRef, cmd string, opts Opts)
 		res.Recording = opts.RecordPath
 	}
 	var newKey bool
-	onAccept := func(fp string) {
-		newKey = true
-		res.HostKeyFP = fp
-		if opts.OnHostKeyAccept != nil {
-			opts.OnHostKeyAccept(hostID, fp)
-		}
-	}
+	trust := e.known.verifier(hostID, ref.HostKey)
 
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: e.known.callback(hostID, ref.HostKey, onAccept),
+		HostKeyCallback: trust.callback,
 		Timeout:         timeout,
 	}
 	// Capture the host key that actually authenticated the server (for audit),
@@ -174,15 +169,28 @@ func (e *Executor) Exec(ctx context.Context, ref HostRef, cmd string, opts Opts)
 	})
 
 	start := time.Now()
-	out, errRun := e.run(ctx, hostID, cfg, cmd, timeout, rec)
+	commitHostKey := func() error {
+		added, fp, err := trust.commit()
+		if err != nil {
+			return err
+		}
+		if !added {
+			return nil
+		}
+		newKey = true
+		res.HostKeyFP = fp
+		if opts.OnHostKeyAccept != nil {
+			opts.OnHostKeyAccept(hostID, fp)
+		}
+		return nil
+	}
+	out, errRun := e.run(ctx, hostID, cfg, cmd, timeout, rec, commitHostKey)
 	res.Duration = time.Since(start)
 	res.NewHostKey = newKey
 
 	var recErr error
 	if rec != nil {
-		var red int
-		red, recErr = rec.close()
-		res.Redactions += red
+		recErr = rec.close()
 	}
 	if recErr != nil {
 		recErr = fmt.Errorf("sshexec: finalize recording (fail-closed): %w", recErr)
@@ -195,17 +203,10 @@ func (e *Executor) Exec(ctx context.Context, ref HostRef, cmd string, opts Opts)
 		return res, errRun
 	}
 
-	redactor := opts.Redactor
-	if redactor == nil {
-		redactor = func(b []byte) ([]byte, int) { return b, 0 }
-	}
 	res.BytesOut = saturatingAddInt(out.rawStdout, out.rawStderr)
 	res.Truncated = out.truncated
-	so, ns := redactor(out.stdout.Bytes())
-	se, ne := redactor(out.stderr.Bytes())
-	res.Stdout = so
-	res.Stderr = se
-	res.Redactions += ns + ne
+	res.Stdout = out.stdout.Bytes()
+	res.Stderr = out.stderr.Bytes()
 	res.ExitCode = out.exit
 	return res, nil
 }
@@ -219,7 +220,8 @@ type runResult struct {
 }
 
 // run performs the dial + session, honoring ctx and the per-command timeout.
-func (e *Executor) run(ctx context.Context, hostID string, cfg *ssh.ClientConfig, cmd string, timeout time.Duration, rec *cast) (*runResult, error) {
+func (e *Executor) run(ctx context.Context, hostID string, cfg *ssh.ClientConfig, cmd string,
+	timeout time.Duration, rec *cast, afterHandshake func() error) (*runResult, error) {
 	dialer := net.Dialer{Timeout: timeout}
 	nc, err := dialer.DialContext(ctx, "tcp", hostID)
 	if err != nil {
@@ -251,6 +253,15 @@ func (e *Executor) run(ctx context.Context, hostID string, cfg *ssh.ClientConfig
 			return nil, fmt.Errorf("sshexec: %w during handshake: %w", ErrTimeout, err)
 		}
 		return nil, fmt.Errorf("sshexec: handshake %s: %w", hostID, err)
+	}
+	// The server has proved possession of its host key and accepted the client's
+	// authentication. Commit any staged TOFU key before opening a session or
+	// sending the command. A concurrent different first key fails closed here.
+	if afterHandshake != nil {
+		if err := afterHandshake(); err != nil {
+			_ = sc.Close()
+			return nil, fmt.Errorf("sshexec: commit authenticated host key: %w", err)
+		}
 	}
 	_ = nc.SetDeadline(time.Time{})
 	client := ssh.NewClient(sc, chans, reqs)

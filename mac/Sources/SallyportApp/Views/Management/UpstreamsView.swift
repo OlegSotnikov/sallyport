@@ -325,7 +325,7 @@ private struct UpstreamEditor: View {
     }
     private var authenticationHint: LocalizedStringResource {
         isOAuth
-            ? LocalizedStringResource("Signs in through the browser and stores OAuth tokens in the vault. Tool-call responses are scrubbed; upstream catalog metadata is not.")
+            ? LocalizedStringResource("Signs in through the browser and stores OAuth tokens in the vault. Tool results, server error messages, and catalog metadata are returned without content rewriting.")
             : LocalizedStringResource("Attaches the key bound to this endpoint's host to each request.")
     }
     private var localKeysHint: LocalizedStringResource {

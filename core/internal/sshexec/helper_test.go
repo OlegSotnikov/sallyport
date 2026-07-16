@@ -127,6 +127,37 @@ func TestHelper_TOFUCapturesHostKey(t *testing.T) {
 	}
 }
 
+func TestHelper_AuthenticationFailureReturnsEvidenceWithoutPinning(t *testing.T) {
+	req, srv := baseReq(t, "must-not-run")
+	unauthorizedPEM, _, err := sshtest.ClientKeyPEM("unauthorized-helper")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.PrivateKeyB64 = base64.StdEncoding.EncodeToString(unauthorizedPEM)
+	req.ReturnCast = true
+
+	resp := drive(t, req)
+	if resp.Error == "" || !strings.Contains(resp.Error, "handshake") {
+		t.Fatalf("authentication failure = %q", resp.Error)
+	}
+	if want := ssh.FingerprintSHA256(srv.HostPublicKey()); resp.HostKeyFP != want {
+		t.Fatalf("failed authentication host fingerprint = %q, want %q", resp.HostKeyFP, want)
+	}
+	if resp.NewHostKey {
+		t.Fatal("failed authentication must not report a newly trusted host")
+	}
+	cast, err := base64.StdEncoding.DecodeString(resp.CastB64)
+	if err != nil || len(cast) == 0 {
+		t.Fatalf("failed authentication cast evidence = %q, %v", resp.CastB64, err)
+	}
+	if _, err := os.Stat(req.KnownHostsPath); !os.IsNotExist(err) {
+		t.Fatalf("failed authentication mutated known_hosts: %v", err)
+	}
+	if commands := srv.ExecedCommands(); len(commands) != 0 {
+		t.Fatalf("failed authentication ran commands: %v", commands)
+	}
+}
+
 // TestHelper_StrictRejectsUnknownHost: strict policy refuses a host it hasn't
 // pinned — fail closed, no command runs.
 func TestHelper_StrictRejectsUnknownHost(t *testing.T) {
@@ -316,12 +347,11 @@ func TestHelper_NormalizeKey(t *testing.T) {
 	}
 }
 
-// TestHelper_RecordingIsRedacted: the .cast file the helper writes goes straight
-// to disk — the caller never sees it — so a token echoed by the command must be
-// scrubbed HERE, or it lands on disk in the clear.
-func TestHelper_RecordingIsRedacted(t *testing.T) {
-	secret := "ghp_" + strings.Repeat("A", 32) // a shape the DLP knows
-	req, _ := baseReq(t, "echo "+secret)
+// TestHelper_PreservesTokenShapedOutput verifies that the helper does not make
+// lossy guesses about credentials in either returned output or recordings.
+func TestHelper_PreservesTokenShapedOutput(t *testing.T) {
+	token := "ghp_" + strings.Repeat("A", 32)
+	req, _ := baseReq(t, "echo "+token)
 	req.RecordPath = filepath.Join(t.TempDir(), "session.cast")
 	resp := drive(t, req)
 	if resp.Error != "" {
@@ -331,10 +361,10 @@ func TestHelper_RecordingIsRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read recording: %v", err)
 	}
-	if strings.Contains(string(cast), secret) {
-		t.Fatalf("the recording contains the secret verbatim:\n%s", cast)
+	if !strings.Contains(decode(t, resp.Stdout), token) {
+		t.Fatalf("token-shaped stdout was changed: %q", decode(t, resp.Stdout))
 	}
-	if !strings.Contains(string(cast), "redacted") {
-		t.Fatalf("expected a redaction marker in the recording:\n%s", cast)
+	if !strings.Contains(string(cast), token) {
+		t.Fatalf("token-shaped recording output was changed:\n%s", cast)
 	}
 }

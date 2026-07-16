@@ -37,13 +37,17 @@ For `normalize_key`, the not-yet-imported key and optional passphrase travel thr
 
 Exec returns base64 stdout and stderr, exit code, byte count, truncation flag, duration, host-key fingerprint, TOFU status, and optional `castB64`. Normalize returns `normalizedKeyB64`.
 
-The helper applies fixed credential-pattern redaction to stdout, stderr, and recordings. The app applies exact-value redaction to stdout and stderr. Treat decrypted recordings as sensitive.
+The helper does not rewrite retained stdout, stderr, or recording content based on credential-like
+patterns. Text decoding and documented retention limits still apply. Treat command output and
+decrypted recordings as sensitive.
 
 When recording is enabled, the helper returns the cast in memory. The app seals it before writing `~/.sallyport/recordings/*.cast.sealed`. The helper does not write a plaintext cast in production.
 
 ## Host keys
 
-- `accept-new` appends the first observed public key to the supplied known-hosts file.
+- `accept-new` stages the first observed public key during key exchange and
+  appends it to the supplied known-hosts file only after client authentication
+  succeeds, before any SSH session or command is opened.
 - `strict` rejects unknown or changed keys.
 - The response includes the observed fingerprint for audit.
 
@@ -64,7 +68,6 @@ The tests use an in-process SSH server and do not require external network acces
 core/
   cmd/sp-ssh/       executable
   internal/sshexec/ helper protocol, SSH execution, recording, host keys
-  internal/dlp/     generic credential redaction
   internal/sshtest/ test server and fixtures
 ```
 

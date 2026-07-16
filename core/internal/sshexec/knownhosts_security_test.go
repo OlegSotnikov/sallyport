@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -87,71 +86,149 @@ func TestKnownHostsFilesUsePrivateModes(t *testing.T) {
 	}
 }
 
-func TestKnownHostsConcurrentTOFUIsSerializedAcrossStores(t *testing.T) {
-	t.Run("same key accepted once", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "known_hosts")
-		key := newKnownHostsTestKey(t)
-		const workers = 24
-		start := make(chan struct{})
-		errs := make(chan error, workers)
-		var callbacks atomic.Int32
-		var wg sync.WaitGroup
-		for i := 0; i < workers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				err := NewKnownHosts(path).verify("host:22", hostKeyAcceptNew, key, func(string) {
-					callbacks.Add(1)
-				})
-				errs <- err
-			}()
-		}
-		close(start)
-		wg.Wait()
-		close(errs)
-		for err := range errs {
+func TestKnownHostsTOFUStagesUntilAuthenticatedCommit(t *testing.T) {
+	key := newKnownHostsTestKey(t)
+	tests := []struct {
+		name      string
+		policy    string
+		seed      bool
+		wantCheck string
+		wantAdded bool
+		wantLines int
+	}{
+		{name: "unknown accept-new stages then commits", policy: hostKeyAcceptNew, wantAdded: true, wantLines: 1},
+		{name: "known accept-new needs no commit", policy: hostKeyAcceptNew, seed: true, wantLines: 1},
+		{name: "known strict needs no commit", policy: hostKeyStrict, seed: true, wantLines: 1},
+		{name: "unknown strict fails during exchange", policy: hostKeyStrict, wantCheck: "unknown host key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "known_hosts")
+			kh := NewKnownHosts(path)
+			if tt.seed {
+				if err := kh.add("host:22", marshalKey(key)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			verifier := kh.verifier("host:22", tt.policy)
+			err := verifier.callback("", nil, key)
+			if tt.wantCheck != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantCheck) {
+					t.Fatalf("callback error = %v, want %q", err, tt.wantCheck)
+				}
+				if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+					t.Fatalf("rejected key exchange mutated known_hosts: %v", statErr)
+				}
+				return
+			}
 			if err != nil {
-				t.Fatalf("concurrent verify: %v", err)
+				t.Fatalf("callback: %v", err)
 			}
-		}
-		if got := callbacks.Load(); got != 1 {
-			t.Fatalf("accept callback count = %d, want 1", got)
-		}
-		if got := nonEmptyLines(t, path); got != 1 {
-			t.Fatalf("known_hosts lines = %d, want 1", got)
-		}
-	})
+			if !tt.seed {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("key exchange mutated known_hosts before authentication: %v", err)
+				}
+			}
+			added, fp, err := verifier.commit()
+			if err != nil {
+				t.Fatalf("commit: %v", err)
+			}
+			if added != tt.wantAdded {
+				t.Fatalf("added = %v, want %v", added, tt.wantAdded)
+			}
+			if tt.wantAdded && fp != ssh.FingerprintSHA256(key) {
+				t.Fatalf("fingerprint = %q, want %q", fp, ssh.FingerprintSHA256(key))
+			}
+			if got := nonEmptyLines(t, path); got != tt.wantLines {
+				t.Fatalf("known_hosts lines = %d, want %d", got, tt.wantLines)
+			}
+		})
+	}
+}
 
-	t.Run("different keys cannot both win", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "known_hosts")
-		keys := []ssh.PublicKey{newKnownHostsTestKey(t), newKnownHostsTestKey(t)}
-		start := make(chan struct{})
-		errs := make(chan error, len(keys))
-		for _, key := range keys {
-			go func() {
-				<-start
-				errs <- NewKnownHosts(path).verify("host:22", hostKeyAcceptNew, key, nil)
-			}()
-		}
-		close(start)
-		var successes, mismatches int
-		for range keys {
-			if err := <-errs; err == nil {
-				successes++
-			} else if strings.Contains(err.Error(), "host key mismatch") {
-				mismatches++
-			} else {
-				t.Fatalf("unexpected verify error: %v", err)
+func TestKnownHostsConcurrentAuthenticatedCommitsAreSerializedAcrossStores(t *testing.T) {
+	tests := []struct {
+		name           string
+		keys           func(*testing.T) []ssh.PublicKey
+		wantAdded      int
+		wantMismatches int
+	}{
+		{
+			name: "same key is persisted once",
+			keys: func(t *testing.T) []ssh.PublicKey {
+				key := newKnownHostsTestKey(t)
+				keys := make([]ssh.PublicKey, 24)
+				for i := range keys {
+					keys[i] = key
+				}
+				return keys
+			},
+			wantAdded: 1,
+		},
+		{
+			name: "different keys cannot both win",
+			keys: func(t *testing.T) []ssh.PublicKey {
+				return []ssh.PublicKey{newKnownHostsTestKey(t), newKnownHostsTestKey(t)}
+			},
+			wantAdded: 1, wantMismatches: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "known_hosts")
+			keys := tt.keys(t)
+			verifiers := make([]*hostKeyVerifier, len(keys))
+			for i, key := range keys {
+				verifiers[i] = NewKnownHosts(path).verifier("host:22", hostKeyAcceptNew)
+				if err := verifiers[i].callback("", nil, key); err != nil {
+					t.Fatalf("stage key %d: %v", i, err)
+				}
 			}
-		}
-		if successes != 1 || mismatches != 1 {
-			t.Fatalf("successes=%d mismatches=%d, want 1/1", successes, mismatches)
-		}
-		if got := nonEmptyLines(t, path); got != 1 {
-			t.Fatalf("known_hosts lines = %d, want 1", got)
-		}
-	})
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("staging mutated known_hosts: %v", err)
+			}
+
+			type outcome struct {
+				added bool
+				err   error
+			}
+			start := make(chan struct{})
+			outcomes := make(chan outcome, len(verifiers))
+			var wg sync.WaitGroup
+			for _, verifier := range verifiers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					added, _, err := verifier.commit()
+					outcomes <- outcome{added: added, err: err}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(outcomes)
+
+			var added, mismatches int
+			for outcome := range outcomes {
+				switch {
+				case outcome.err == nil && outcome.added:
+					added++
+				case outcome.err == nil:
+				case strings.Contains(outcome.err.Error(), "host key mismatch"):
+					mismatches++
+				default:
+					t.Fatalf("unexpected commit error: %v", outcome.err)
+				}
+			}
+			if added != tt.wantAdded || mismatches != tt.wantMismatches {
+				t.Fatalf("added=%d mismatches=%d, want %d/%d",
+					added, mismatches, tt.wantAdded, tt.wantMismatches)
+			}
+			if got := nonEmptyLines(t, path); got != 1 {
+				t.Fatalf("known_hosts lines = %d, want 1", got)
+			}
+		})
+	}
 }
 
 func TestKnownHostsLockFailureAndInvalidIdentityFailClosed(t *testing.T) {
@@ -165,7 +242,7 @@ func TestKnownHostsLockFailureAndInvalidIdentityFailClosed(t *testing.T) {
 		if err := os.Mkdir(path+".lock", 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := kh.verify("host:22", hostKeyStrict, key, nil); err == nil || !strings.Contains(err.Error(), "lock known_hosts") {
+		if err := kh.verifier("host:22", hostKeyStrict).callback("", nil, key); err == nil || !strings.Contains(err.Error(), "lock known_hosts") {
 			t.Fatalf("verify with unusable lock = %v", err)
 		}
 	})
@@ -173,7 +250,7 @@ func TestKnownHostsLockFailureAndInvalidIdentityFailClosed(t *testing.T) {
 	for _, hostID := range []string{"", "host:22\nattacker:22", "host:22 other"} {
 		t.Run("invalid identity", func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "known_hosts")
-			if err := NewKnownHosts(path).verify(hostID, hostKeyAcceptNew, key, nil); err == nil {
+			if err := NewKnownHosts(path).verifier(hostID, hostKeyAcceptNew).callback("", nil, key); err == nil {
 				t.Fatalf("identity %q must be rejected", hostID)
 			}
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -208,7 +285,7 @@ func TestKnownHostsFilesystemFailuresAreReturned(t *testing.T) {
 		if err := os.WriteFile(path, []byte(strings.Repeat("x", 70<<10)), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := NewKnownHosts(path).verify("host:22", hostKeyAcceptNew, key, nil); err == nil || !strings.Contains(err.Error(), "read known_hosts") {
+		if err := NewKnownHosts(path).verifier("host:22", hostKeyAcceptNew).callback("", nil, key); err == nil || !strings.Contains(err.Error(), "read known_hosts") {
 			t.Fatalf("verify corrupt store error = %v", err)
 		}
 	})
@@ -254,7 +331,7 @@ func TestKnownHostsRejectsSymlinksHardlinksFIFOsAndLinkedParent(t *testing.T) {
 			}
 			makeHostileFile(t, kind, path+".lock", target)
 			mustReturnErrorPromptly(t, func() error {
-				return kh.verify("host:22", hostKeyStrict, key, nil)
+				return kh.verifier("host:22", hostKeyStrict).callback("", nil, key)
 			})
 			assertFileUnchanged(t, target, "lock-target", 0o644)
 		})

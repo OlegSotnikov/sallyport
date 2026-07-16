@@ -138,7 +138,7 @@ private func loopbackAsPublic(_ ip: IPAddr) -> IPClass {
 @Suite("HTTPExecutor — http.request egress", .serialized)
 struct HTTPExecutorTests {
 
-    @Test("injects the bound credential; the secret never reaches the caller")
+    @Test("injects the bound credential and returns the response")
     func injectsBoundCredential() async throws {
         MockHTTP.handler.withLock { $0 = { req, _ in
             if req.value(forHTTPHeaderField: "Authorization") == "Bearer \(testToken)" {
@@ -154,10 +154,8 @@ struct HTTPExecutorTests {
         // The parsed `json` field is returned INSTEAD of a raw body — never both.
         #expect(out.output["json"] == .object(["authorized": .bool(true)]))
         #expect(out.output["body"] == nil)
-        // The token must never appear in what the caller receives...
+        // This response did not echo the token, so it is naturally absent.
         #expect(!String(describing: out.output).contains(testToken))
-        // ...but IS handed to the engine for DLP scrubbing + zeroize.
-        #expect(out.injected.contains(Data(testToken.utf8)))
         #expect(out.bytesOut == #"{"authorized":true}"#.utf8.count)
     }
 
@@ -273,7 +271,7 @@ struct HTTPExecutorTests {
         #expect(out.output["cross_host_redirect_refused"] == .bool(true))
     }
 
-    @Test("a SigV4 request refuses same-host redirects even without a redaction payload")
+    @Test("a SigV4 request refuses same-host redirects")
     func sigV4RequestRefusesRedirect() async throws {
         let finalHits = Locked(0)
         let startWasSigned = Locked(false)
@@ -303,7 +301,6 @@ struct HTTPExecutorTests {
         #expect(out.output["status"] == .int(302))
         #expect(out.output["final_url"] == .string("https://192.0.2.1/start"))
         #expect(out.output["cross_host_redirect_refused"] == .bool(true))
-        #expect(out.injected.isEmpty, "SigV4 has no verbatim value to redact")
     }
 
     @Test("self-signed TLS is accepted ONLY with the key's explicit opt-in")
@@ -351,10 +348,9 @@ struct HTTPExecutorTests {
         // Resolver bound to a DIFFERENT host → nothing injected here. 192.0.2.1
         // (TEST-NET-1) classifies public, so the unbound request is allowed.
         let e = makeExecutor()
-        let out = try await e.execute(httpAction(url: "https://192.0.2.1/"),
-                                      resolve: binding("other.example", bearerCred()))
+        _ = try await e.execute(httpAction(url: "https://192.0.2.1/"),
+                                resolve: binding("other.example", bearerCred()))
         #expect(!sawAuth.current, "injected a credential for an unbound host")
-        #expect(out.injected.isEmpty)
     }
 
     @Test("an https→http same-host redirect is refused (header adapter can't leak)")
@@ -511,7 +507,7 @@ struct HTTPExecutorTests {
                 else { return .respond(status: 400, headers: [:], body: "") }
                 return .respond(status: 200, headers: ["Content-Type": "application/json"],
                                 body: #"{"access_token":"AT-123","token_type":"Bearer","expires_in":3600}"#)
-            default: // resource API — echoes the token to exercise redaction capture
+            default: // resource API — echoes the token to verify faithful output
                 seenAuth.withLock { $0 = req.value(forHTTPHeaderField: "Authorization") ?? "" }
                 return .respond(status: 200, headers: [:], body: #"{"ok":true,"echo":"AT-123"}"#)
             }
@@ -528,11 +524,8 @@ struct HTTPExecutorTests {
         let out = try await e.execute(httpAction(url: "https://192.0.2.20/api"), resolve: resolve)
         #expect(out.output["status"] == .int(200))
         #expect(seenAuth.current == "Bearer AT-123")
-        // The executor returns the RAW body + the injected value(s); the engine
-        // does the actual redaction. The fetched TOKEN must be captured for
-        // redaction; the client SECRET must not (it never went on the wire).
-        #expect(out.injected.contains(Data("AT-123".utf8)))
-        #expect(!out.injected.contains(Data("super-client-secret".utf8)))
+        #expect(out.output["json"] == .object(["ok": .bool(true), "echo": .string("AT-123")]),
+                "the endpoint response must be returned without content rewriting")
         #expect(!String(describing: out.output).contains("super-client-secret"))
 
         // A second request reuses the cached token — no second token fetch.

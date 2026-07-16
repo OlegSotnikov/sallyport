@@ -59,4 +59,26 @@ struct AppModelDecisionTests {
         #expect(outcome.verdict == .denied)
         #expect(!model.pending.contains { $0.id == "ask-2" })
     }
+
+    @Test("HTTP body display metadata survives the engine-to-card mapping")
+    func bodyPreviewMapping() async throws {
+        let model = makeModel()
+        var request = ask(id: "http-body", mode: "per-call")
+        request.channel = "http"
+        request.tool = "http.request"
+        request.bodyPreview = "{\n  \"delete\" : true\n}"
+        request.bodyByteCount = 9_001
+        request.bodyPreviewTruncated = true
+        let expectedPreview = request.bodyPreview
+
+        async let verdict = model.requestApproval(request)
+        await waitForCard(model, id: "http-body")
+        let card = try #require(model.pending.first { $0.id == "http-body" })
+        #expect(card.action.bodyPreview == expectedPreview)
+        #expect(card.action.bodyByteCount == 9_001)
+        #expect(card.action.bodyPreviewTruncated)
+
+        await model.deny(card)
+        #expect((await verdict).verdict == .denied)
+    }
 }

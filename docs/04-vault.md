@@ -67,7 +67,9 @@ Sallyport imports Ed25519, RSA, and ECDSA OpenSSH private keys. An encrypted key
 
 During production `ssh.exec`, the private key is opened only in the app process. The app's SSH signer answers `sp-ssh` over an inherited socket. The helper receives signatures, not the private key. A legacy stdin-key exec path remains for tests. Key import uses stdin because the key is not yet in the vault.
 
-`sp-ssh` applies fixed-pattern redaction to output and the asciicast. The app then applies exact-value redaction to stdout and stderr, seals the cast with a separate DEK-derived recording key, and writes `~/.sallyport/recordings/*.cast.sealed`.
+SSH stdout, stderr, and asciicast recordings are preserved without content inspection. The app seals
+the cast with a separate DEK-derived recording key and writes
+`~/.sallyport/recordings/*.cast.sealed`. Treat returned output and decrypted recordings as sensitive.
 
 ## Files
 
@@ -87,4 +89,4 @@ The directory and agent socket use mode `0700`; sensitive files use mode `0600`.
 
 The vault has no reveal, credential export, or recovery key. Losing the device, K-wrap, or sealed identity requires a new vault and reissued credentials.
 
-The Secure Enclave protects against an offline copy, not decrypted memory in an unlocked process. Same-user malware, root, and code execution inside Sallyport remain separate risks. See [08-security-model.md](08-security-model.md) for limits, [14-trust-model.md](14-trust-model.md) for lifecycle and authorization, and [06-audit-dlp.md](06-audit-dlp.md) for the audit format.
+The Secure Enclave protects against an offline copy, not decrypted memory in an unlocked process. Same-user malware, root, and code execution inside Sallyport remain separate risks. See [08-security-model.md](08-security-model.md) for limits, [14-trust-model.md](14-trust-model.md) for lifecycle and authorization, and [06-audit.md](06-audit.md) for the audit format.

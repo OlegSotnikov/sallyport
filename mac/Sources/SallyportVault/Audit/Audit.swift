@@ -68,7 +68,7 @@ public struct AuditEvent: Codable, Sendable, Equatable {
     public var channel: String              // "http" | "ssh" | "mcp"
     public var tool: String                 // "http.request" | "ssh.exec" | …
     public var target: String               // host / destination, never a full URL with query secrets
-    public var argsPreview: String          // Short redacted preview, never raw arguments.
+    public var argsPreview: String          // Bounded caller-data preview; may be sensitive.
     public var decision: String             // allow | deny | ask
     public var rule: String
     public var policyHash: String
@@ -76,7 +76,6 @@ public struct AuditEvent: Codable, Sendable, Equatable {
     public var isError: Bool
     public var bytesOut: Int
     public var durationMs: Int64
-    public var dlpRedactions: Int
     public var recording: String
     /// SHA-256 fingerprint of the SSH host key, or empty for other events.
     public var hostKeyFp: String
@@ -87,14 +86,14 @@ public struct AuditEvent: Codable, Sendable, Equatable {
                 tool: String = "", target: String = "", argsPreview: String = "",
                 decision: String = "", rule: String = "", policyHash: String = "",
                 grantId: String = "", isError: Bool = false, bytesOut: Int = 0,
-                durationMs: Int64 = 0, dlpRedactions: Int = 0, recording: String = "",
+                durationMs: Int64 = 0, recording: String = "",
                 hostKeyFp: String = "", origin: Origin? = nil, ts: String = "") {
         self.seq = 0; self.ts = ts; self.prevHash = ""; self.thisHash = ""
         self.identity = identity; self.session = session; self.channel = channel
         self.tool = tool; self.target = target; self.argsPreview = argsPreview
         self.decision = decision; self.rule = rule; self.policyHash = policyHash
         self.grantId = grantId; self.isError = isError; self.bytesOut = bytesOut
-        self.durationMs = durationMs; self.dlpRedactions = dlpRedactions
+        self.durationMs = durationMs
         self.recording = recording; self.hostKeyFp = hostKeyFp; self.origin = origin
     }
 
@@ -108,7 +107,6 @@ public struct AuditEvent: Codable, Sendable, Equatable {
         case isError = "is_error"
         case bytesOut = "bytes_out"
         case durationMs = "duration_ms"
-        case dlpRedactions = "dlp_redactions"
         case hostKeyFp = "host_key_fp"
         case thisHash = "this_hash"
     }
@@ -133,7 +131,6 @@ public struct AuditEvent: Codable, Sendable, Equatable {
         isError = try c.decodeIfPresent(Bool.self, forKey: .isError) ?? false
         bytesOut = try c.decodeIfPresent(Int.self, forKey: .bytesOut) ?? 0
         durationMs = try c.decodeIfPresent(Int64.self, forKey: .durationMs) ?? 0
-        dlpRedactions = try c.decodeIfPresent(Int.self, forKey: .dlpRedactions) ?? 0
         recording = try c.decodeIfPresent(String.self, forKey: .recording) ?? ""
         hostKeyFp = try c.decodeIfPresent(String.self, forKey: .hostKeyFp) ?? ""
         origin = try c.decodeIfPresent(Origin.self, forKey: .origin)
@@ -158,7 +155,6 @@ public struct AuditEvent: Codable, Sendable, Equatable {
             "is_error": .bool(isError),
             "bytes_out": .int(bytesOut),
             "duration_ms": .int(Int(durationMs)),
-            "dlp_redactions": .int(dlpRedactions),
             "recording": .string(recording),
         ]
         // Omit an empty host fingerprint to preserve existing canonical rows.
@@ -251,8 +247,9 @@ public final class AuditLog: @unchecked Sendable {
 
     static let fileName = "audit-000001.jsonl"
 
-    /// One row contains a bounded, redacted event. Refusing larger rows keeps a
-    /// oversized journal from exhausting memory during verification or unlock.
+    /// One row contains a bounded event and may include caller-supplied data.
+    /// Refusing larger rows keeps an oversized journal from exhausting memory
+    /// during verification or unlock.
     static let maximumRowBytes = 1 * 1024 * 1024
     private static let readChunkBytes = 64 * 1024
 

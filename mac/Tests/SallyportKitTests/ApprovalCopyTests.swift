@@ -10,7 +10,7 @@ struct ApprovalCopyTests {
     @Test("known engine reasons are localized; unknown reasons remain verbatim")
     func reasons() {
         #expect(ApprovalCopy.reason("Approve this agent for the current session.", locale: english)
-                == "Approve this agent for the current session.")
+                == "Allow this process for the current session.")
         #expect(ApprovalCopy.reason("This action requires approval every time.", locale: english)
                 == "This action requires approval every time.")
         #expect(ApprovalCopy.reason("class=write · session recorded", locale: english)
@@ -19,6 +19,28 @@ struct ApprovalCopyTests {
                 == "Bound credential: cloudflare")
         #expect(ApprovalCopy.reason("upstream policy: custom", locale: english)
                 == "upstream policy: custom")
+    }
+
+    @Test("session copy discloses continuing access without describing one action")
+    func sessionScope() {
+        let request = Fixtures.sessionClaude
+        #expect(ApprovalCopy.notificationSubtitle(for: request, locale: english)
+                == "Requests a Sallyport session")
+        #expect(ApprovalCopy.notificationBody(for: request, locale: english)
+                == "The session ends when this process exits, you revoke access, or the vault locks. Future requests won't prompt again unless per-call approval applies.")
+        #expect(ApprovalCopy.touchIDReason(for: request, locale: english)
+                == "Allow a Sallyport session for Claude Code")
+    }
+
+    @Test("HTTP body metadata states exact size and truncation")
+    func httpBodyMetadata() {
+        #expect(ApprovalCopy.httpBodyMetadata(
+            byteCount: 42, truncated: false, locale: english) == "42 bytes")
+        #expect(ApprovalCopy.httpBodyMetadata(
+            byteCount: 9_001, truncated: true, locale: english)
+                == "Preview truncated · 9,001 bytes total")
+        #expect(ApprovalCopy.httpBodyMetadata(
+            byteCount: 1, truncated: false, locale: english) == "1 byte")
     }
 
     @Test("engine SSH framing is removed without changing the command")

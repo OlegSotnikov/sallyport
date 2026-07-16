@@ -30,7 +30,9 @@ struct ApprovalCardView: View {
             if isSession || isPerCall { signatureBanner }
             // A credential request collects the specific key in the next sheet.
             if request.action.tool != "sallyport.request_credential" { actionBlock }
-            if isSession { sessionScopeNote }
+            // Verified requests disclose session scope in the mode strip. Keep
+            // it visible here when that strip is replaced by a provenance warning.
+            if isSession && !isIntact { sessionScopeNote }
             if isPerCall { perCallNote }
             buttonRow
             detailsDisclosure
@@ -50,17 +52,17 @@ struct ApprovalCardView: View {
     @ViewBuilder private var modeStrip: some View {
         switch request.mode {
         case "session":
-            contextStrip(icon: "person.badge.shield.checkmark", tint: Theme.accent, title: "Approve this agent",
-                         detail: "Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply.")
+            contextStrip(icon: "person.badge.shield.checkmark", tint: Theme.accent, title: "Allow session",
+                         detail: Text(verbatim: ApprovalCopy.sessionDisclosure()))
         case "session-touchid":
-            contextStrip(icon: "touchid", tint: Theme.accent, title: "Approve this agent with Touch ID",
-                         detail: "Requires Touch ID. Session approval lasts until this process exits, you revoke it, or the vault locks. Per-call settings still apply.")
+            contextStrip(icon: "touchid", tint: Theme.accent, title: "Allow session with Touch ID",
+                         detail: Text(verbatim: ApprovalCopy.sessionDisclosure()))
         case "per-call":
             contextStrip(icon: "exclamationmark.lock.fill", tint: Theme.warning, title: "Per-call approval",
-                         detail: "Approval covers this call only.")
+                         detail: Text("Approval covers this call only."))
         case "per-call-touchid", "strict":
             contextStrip(icon: "touchid", tint: Theme.warning, title: "Per-call approval with Touch ID",
-                         detail: "This call requires Touch ID.")
+                         detail: Text("This call requires Touch ID."))
         default:
             EmptyView()
         }
@@ -68,12 +70,12 @@ struct ApprovalCardView: View {
 
     private func contextStrip(icon: String, tint: Color,
                               title: LocalizedStringResource,
-                              detail: LocalizedStringResource) -> some View {
+                              detail: Text) -> some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             Image(systemName: icon).foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.callout.weight(.semibold))
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                detail.font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
@@ -141,7 +143,7 @@ struct ApprovalCardView: View {
     private var sessionScopeNote: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
             Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
-            Text("Applies until this process exits, you revoke it, or the vault locks.")
+            Text(verbatim: ApprovalCopy.sessionDisclosure())
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -194,13 +196,12 @@ struct ApprovalCardView: View {
             .background(Theme.Surface.inset, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous).strokeBorder(Theme.Surface.stroke))
 
-            if let body = request.action.bodyPreview,
-               request.action.channel != "ssh", !body.isEmpty {
-                Text(verbatim: body)
-                    .font(Theme.Typography.monoSmall)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .padding(.leading, 2)
+            if isPerCall, request.action.tool == "http.request",
+               let body = request.action.bodyPreview, !body.isEmpty {
+                HTTPBodyPreviewView(
+                    preview: body,
+                    originalByteCount: request.action.bodyByteCount ?? body.utf8.count,
+                    truncated: request.action.bodyPreviewTruncated)
             }
         }
     }
@@ -255,7 +256,7 @@ struct ApprovalCardView: View {
 
     private var approveLabel: LocalizedStringResource {
         if isProcessing { return "Authorizing…" }
-        if isSession { return "Approve agent" }
+        if isSession { return "Allow session" }
         if isPerCall { return "Approve call" }
         return "Approve"
     }

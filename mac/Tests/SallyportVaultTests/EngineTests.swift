@@ -12,8 +12,8 @@ private struct FakeHTTP: ChannelExecutor {
         // Mimic the real executor's contract: it parses the URL itself and asks
         // the resolver for THAT host (the engine's anti-divergence check).
         let host = URL(string: action.args["url"]?.stringValue ?? "")?.host ?? ""
-        let cred = try resolve(host, "/")
-        if requireCred { #expect(cred != nil, "engine must pre-resolve the bound credential") }
+        let cred = try await resolve(host, "/")
+        if requireCred { #expect(cred != nil, "engine must resolve the bound credential") }
         return ExecOutput(output: ["status": .double(200), "json": .object(["ok": .bool(true)])], bytesOut: 11)
     }
 }
@@ -23,12 +23,23 @@ private final class FakeApprover: Approver, @unchecked Sendable {
     let verdict: ApprovalOutcome.Verdict
     private let lock = NSLock()
     private(set) var modes: [String] = []
+    private var previewStorage: [String?] = []
+    private var byteCountStorage: [Int?] = []
+    private var truncatedStorage: [Bool] = []
     init(_ v: ApprovalOutcome.Verdict) { verdict = v }
     func requestApproval(_ req: EngineApproval) async -> ApprovalOutcome {
-        lock.withLock { modes.append(req.mode) }
+        lock.withLock {
+            modes.append(req.mode)
+            previewStorage.append(req.bodyPreview)
+            byteCountStorage.append(req.bodyByteCount)
+            truncatedStorage.append(req.bodyPreviewTruncated)
+        }
         return ApprovalOutcome(verdict)
     }
     var askCount: Int { lock.withLock { modes.count } }
+    var bodyPreviews: [String?] { lock.withLock { previewStorage } }
+    var bodyByteCounts: [Int?] { lock.withLock { byteCountStorage } }
+    var bodyPreviewTruncations: [Bool] { lock.withLock { truncatedStorage } }
 }
 
 private final class AuditEventSink: @unchecked Sendable {
@@ -214,6 +225,38 @@ struct EngineTests {
         #expect(approver.modes == ["per-call-touchid"], "the card must escalate to Touch ID, not click")
     }
 
+    @Test("HTTP bodies are disclosed only when the decision authorizes this call")
+    func httpBodyDisclosureMatchesApprovalScope() async throws {
+        let body = #"{"operation":"delete","id":42}"#
+        let action = Action(tool: "http.request", args: [
+            "method": .string("POST"),
+            "url": .string("https://api.example.com/x"),
+            "body": .string(body),
+        ])
+
+        let sessionApprover = FakeApprover(.approved)
+        let (sessionEngine, _, _) = try await build(sessionApprover)
+        let sessionResult = await sessionEngine.invoke(
+            identity: "agent://session", action: action, provenance: prov)
+        #expect(sessionResult.ok)
+        #expect(sessionApprover.modes == ["session"])
+        #expect(sessionApprover.bodyPreviews == [nil],
+                "a process-session grant must not masquerade as approval of one HTTP body")
+
+        let perCallApprover = FakeApprover(.approved)
+        let (perCallEngine, _, _) = try await build(perCallApprover, confirm: "click")
+        let perCallResult = await perCallEngine.invoke(
+            identity: "agent://per-call", action: action, provenance: prov)
+        #expect(perCallResult.ok)
+        #expect(perCallApprover.modes == ["per-call"])
+        let preview = try #require(perCallApprover.bodyPreviews.first ?? nil)
+        #expect(preview.contains("\"operation\": \"delete\""))
+        #expect(!preview.contains("sk_live_42"),
+                "the display preview is created before vault credential injection")
+        #expect(perCallApprover.bodyByteCounts == [body.utf8.count])
+        #expect(perCallApprover.bodyPreviewTruncations == [false])
+    }
+
     @Test("an unidentifiable caller with a per-call key is still DENIED (#6, not asked)")
     func unidentifiablePerCallStillDenied() async throws {
         let approver = FakeApprover(.approved)
@@ -226,19 +269,6 @@ struct EngineTests {
         #expect(approver.askCount == 0, "a per-call key must NOT wave an unidentifiable caller to a card")
     }
 
-    @Test("DLP scrubs object KEYS, not just values — {\"<token>\": true} can't leak (#3)")
-    func redactScrubsObjectKeys() {
-        let token = "sk_live_deadbeef_secret"
-        let out: [String: JSONValue] = ["json": .object([
-            .init(token): .bool(true),                     // secret is the KEY
-            "note": .string("value \(token) here"),        // and in a value
-        ])]
-        let (scrubbed, n) = Engine.redactOutput(out, injected: [Data(token.utf8)])
-        let text = "\(scrubbed)"
-        #expect(!text.contains(token), "the token must not survive as a key or a value")
-        #expect(n >= 2)
-    }
-
     @Test("a lock that lands WHILE a call is in flight discards the result (#5 epoch)")
     func lockDuringExecutionDiscardsResult() async throws {
         // An HTTP fake that locks the vault mid-execute — models the vault
@@ -248,12 +278,13 @@ struct EngineTests {
             let epoch: Int64
             init(_ s: VaultStore, epoch: Int64) { store = s; self.epoch = epoch }
             func execute(_ action: Action, resolve: CredResolver) async throws -> ExecOutput {
-                _ = try resolve(URL(string: action.args["url"]?.stringValue ?? "")?.host ?? "", "/")
+                _ = try await resolve(
+                    URL(string: action.args["url"]?.stringValue ?? "")?.host ?? "", "/")
                 _ = await store.beginLock(expectedEpoch: epoch)
                 return ExecOutput(
                     output: [
                         "status": .double(200),
-                        "secret_echo": .string("leaked"),
+                        "sensitive_output": .string("leaked"),
                         "host_key_fingerprint": .string("SHA256:test"),
                     ],
                     bytesOut: 6,
@@ -431,7 +462,7 @@ struct EngineTests {
 
             func execute(_ action: Action, resolve: CredResolver) async throws -> ExecOutput {
                 let host = URL(string: action.args["url"]?.stringValue ?? "")?.host ?? ""
-                _ = try resolve(host, "/")
+                _ = try await resolve(host, "/")
                 try audit.close()
                 return ExecOutput(output: ["status": .double(200)], bytesOut: 3)
             }
@@ -530,19 +561,20 @@ struct EngineTests {
         #expect(approver.modes == ["per-call", "per-call"], "a per-call key never remembers")
     }
 
-    @Test("a secret echoed by the upstream is DLP-scrubbed before the agent sees it")
-    func echoedSecretRedacted() async throws {
+    @Test("an upstream response is returned without echo rewriting")
+    func echoedSecretPreserved() async throws {
         /// An upstream that reflects the injected credential back (an echo
         /// endpoint / error page quoting the Authorization header).
         struct EchoHTTP: ChannelExecutor {
             func execute(_ action: Action, resolve: CredResolver) async throws -> ExecOutput {
                 let host = URL(string: action.args["url"]?.stringValue ?? "")?.host ?? ""
-                let cred = try resolve(host, "/")
+                var cred = try await resolve(host, "/")
+                defer { cred?.secret.zeroize() }
                 let secret = cred?.secret ?? Data()
                 return ExecOutput(output: [
                     "json": .object(["auth_echo": .string("Bearer " + String(decoding: secret, as: UTF8.self)),
                                      "nested": .array([.string("token=\(String(decoding: secret, as: UTF8.self))")])]),
-                ], bytesOut: 0, injected: [secret])
+                ], bytesOut: 0)
             }
         }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spr-\(UUID().uuidString)")
@@ -558,8 +590,8 @@ struct EngineTests {
         let r = await engine.invoke(identity: "agent://t", action: get(), provenance: prov)
         #expect(r.ok)
         let text = String(describing: r.output)
-        #expect(!text.contains("sk_live_42"), "the injected secret must NEVER reach the agent")
-        #expect(text.contains("«redacted"), "the echo is replaced by a redaction marker")
+        #expect(text.contains("sk_live_42"),
+                "Sallyport must not rewrite a successful upstream response")
     }
 
     @Test("ssh.exec to a host that isn't in the inventory is denied WITHOUT asking a human")
@@ -613,6 +645,55 @@ struct EngineTests {
         #expect(result.output["recording"] == .string("/tmp/recordings/ssh-cast.age"))
         let event = try #require(activity.events.last)
         #expect(event.recording == "/tmp/recordings/ssh-cast.age")
+    }
+
+    @Test("an SSH failure audits its sealed recording and presented host fingerprint")
+    func sshFailureEvidenceIsAudited() async throws {
+        struct FailedSSH: SSHExecuting {
+            func host(_ name: String) -> HostRef? {
+                name == "box" ? HostRef(name: name, addr: "box.example") : nil
+            }
+
+            func execute(host: HostRef, command: String, timeoutS: Int,
+                         keyPEM: Data) async throws -> ExecOutput {
+                throw SSHExecutionError(
+                    message: "sshexec: handshake rejected Bearer sk_live_abcdefghij1234567890",
+                    bytesOut: 17,
+                    recording: "/tmp/recordings/failed-ssh-cast.age",
+                    hostKeyFingerprint: "SHA256:presented-host-key")
+            }
+        }
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spf-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try VaultStore(creatingAt: dir.appendingPathComponent("v.db"),
+                                   keystore: FileAgeKeystore())
+        let engine = Engine(
+            store: store,
+            sessions: SessionStore(),
+            settings: SettingsStore(initial: SettingsState(sessionAuth: SettingsStore.sessionAuthOff)),
+            audit: try AuditLog(dir: dir.appendingPathComponent("a"),
+                                recipientX963: (await store.auditRecipient()) ?? Data()),
+            http: FakeHTTP(requireCred: false),
+            ssh: FailedSSH(),
+            approver: FakeApprover(.approved))
+        let activity = AuditEventSink()
+        await engine.setActivitySink { activity.append($0) }
+
+        let result = await engine.invoke(identity: "agent://t", action: Action(
+            tool: "ssh.exec", args: ["host": .string("box"), "cmd": .string("true")]),
+            provenance: prov)
+
+        #expect(!result.ok)
+        #expect(result.errorCode == "SALLYPORT_UPSTREAM_DOWN")
+        #expect(result.reason.contains("handshake rejected"))
+        #expect(result.reason.contains("sk_live_abcdefghij1234567890"),
+                "token-shaped remote output is not treated as proof of a credential leak")
+        let event = try #require(activity.events.last)
+        #expect(event.isError)
+        #expect(event.bytesOut == 17)
+        #expect(event.recording == "/tmp/recordings/failed-ssh-cast.age")
+        #expect(event.hostKeyFp == "SHA256:presented-host-key")
     }
 
     @Test("request_credential routes to the prompter and returns the human's answer")

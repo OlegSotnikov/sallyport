@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Security
 
 /// OAuth 2.1 support for remote MCP servers. Implements protected-resource and
 /// authorization-server discovery, dynamic client registration, PKCE, loopback
@@ -59,6 +60,7 @@ public enum MCPOAuth {
         case grantRevoked
         case notSignedIn(String)
         case cancelled
+        case secureRandomFailed
 
         public var description: String {
             switch self {
@@ -70,6 +72,7 @@ public enum MCPOAuth {
             case .grantRevoked: return "Sign-in was revoked. Connect again."
             case .notSignedIn(let u): return "\(u) is not signed in. Open MCP Servers and select Connect."
             case .cancelled: return "Sign-in was cancelled."
+            case .secureRandomFailed: return "Secure random number generation failed."
             }
         }
     }
@@ -94,14 +97,14 @@ public enum MCPOAuth {
         return NetGuard.classifyIP(ip) == .privateInternal
     }
 
-    static func discover(endpoint: URL, session: URLSession, netGuard: NetGuard,
+    static func discover(endpoint: URL, transport: PinnedHTTPTransport, netGuard: NetGuard,
                          timeout: TimeInterval) async throws -> ServerMetadata {
         let allowPrivate = allowsPrivate(endpoint: endpoint)
         // Ask the resource for its authorization server.
         var issuers: [URL] = []
-        if let link = try? await protectedResourceMetadataURL(endpoint: endpoint, session: session,
+        if let link = try? await protectedResourceMetadataURL(endpoint: endpoint, transport: transport,
                                                               netGuard: netGuard, timeout: timeout),
-           let servers = try? await authorizationServers(from: link, session: session, netGuard: netGuard,
+           let servers = try? await authorizationServers(from: link, transport: transport, netGuard: netGuard,
                                                          allowPrivate: allowPrivate, timeout: timeout) {
             issuers = servers
         }
@@ -113,7 +116,7 @@ public enum MCPOAuth {
         for issuer in issuers {
             for candidate in metadataURLs(issuer: issuer) {
                 do {
-                    let meta = try await fetchServerMetadata(candidate, issuer: issuer, session: session,
+                    let meta = try await fetchServerMetadata(candidate, issuer: issuer, transport: transport,
                                                              netGuard: netGuard, allowPrivate: allowPrivate,
                                                              timeout: timeout)
                     return meta
@@ -129,8 +132,8 @@ public enum MCPOAuth {
     /// `WWW-Authenticate` naming its resource metadata (RFC 9728). We also
     /// accept the conventional well-known path when the header is absent.
     private static func protectedResourceMetadataURL(
-        endpoint: URL, session: URLSession, netGuard: NetGuard, timeout: TimeInterval) async throws -> URL {
-        try netGuard.validate(host: endpoint.host ?? "", bound: true)
+        endpoint: URL, transport: PinnedHTTPTransport, netGuard: NetGuard,
+        timeout: TimeInterval) async throws -> URL {
         var probe = URLRequest(url: endpoint)
         probe.httpMethod = "POST"
         probe.timeoutInterval = timeout
@@ -141,7 +144,8 @@ public enum MCPOAuth {
             "params": ["protocolVersion": "2025-06-18", "capabilities": [:] as [String: Any],
                        "clientInfo": ["name": "sallyport", "version": "1.0"]],
         ])
-        let (_, response) = try await Self.cappedData(probe, session: session)
+        let (_, response) = try await Self.cappedData(
+            probe, transport: transport, netGuard: netGuard, bound: true)
         if let challenge = response.value(forHTTPHeaderField: "WWW-Authenticate"),
            let link = resourceMetadataLink(in: challenge), let url = URL(string: link) {
             return url
@@ -165,10 +169,10 @@ public enum MCPOAuth {
         return String(rest[..<end]).trimmingCharacters(in: .whitespaces)
     }
 
-    private static func authorizationServers(from metadataURL: URL, session: URLSession,
+    private static func authorizationServers(from metadataURL: URL, transport: PinnedHTTPTransport,
                                              netGuard: NetGuard, allowPrivate: Bool,
                                              timeout: TimeInterval) async throws -> [URL] {
-        let json = try await getJSON(metadataURL, session: session, netGuard: netGuard,
+        let json = try await getJSON(metadataURL, transport: transport, netGuard: netGuard,
                                      allowPrivate: allowPrivate, timeout: timeout)
         let servers = (json["authorization_servers"] as? [Any])?.compactMap { $0 as? String } ?? []
         return servers.compactMap { URL(string: $0) }
@@ -196,10 +200,10 @@ public enum MCPOAuth {
         return out
     }
 
-    private static func fetchServerMetadata(_ url: URL, issuer: URL, session: URLSession,
+    private static func fetchServerMetadata(_ url: URL, issuer: URL, transport: PinnedHTTPTransport,
                                             netGuard: NetGuard, allowPrivate: Bool,
                                             timeout: TimeInterval) async throws -> ServerMetadata {
-        let json = try await getJSON(url, session: session, netGuard: netGuard,
+        let json = try await getJSON(url, transport: transport, netGuard: netGuard,
                                      allowPrivate: allowPrivate, timeout: timeout)
         guard let authorize = json["authorization_endpoint"] as? String,
               let token = json["token_endpoint"] as? String,
@@ -218,7 +222,8 @@ public enum MCPOAuth {
     // MARK: - Dynamic client registration (RFC 7591)
 
     /// Register Sallyport as a public native client for `redirectURI`.
-    static func register(metadata: ServerMetadata, redirectURI: String, session: URLSession,
+    static func register(metadata: ServerMetadata, redirectURI: String,
+                         transport: PinnedHTTPTransport,
                          netGuard: NetGuard, allowPrivate: Bool,
                          timeout: TimeInterval) async throws -> (id: String, secret: String) {
         guard let url = URL(string: metadata.registration), !metadata.registration.isEmpty else {
@@ -226,7 +231,6 @@ public enum MCPOAuth {
                 "This server requires a pre-issued client; Sallyport cannot configure one yet.")
         }
         try requireSecure(url, allowPrivate: allowPrivate)
-        try netGuard.validate(host: url.host ?? "", bound: allowPrivate)
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = timeout
@@ -240,7 +244,8 @@ public enum MCPOAuth {
             "token_endpoint_auth_method": "none",   // public client + PKCE (OAuth 2.1)
             "application_type": "native",
         ])
-        let (data, response) = try await Self.cappedData(req, session: session)
+        let (data, response) = try await Self.cappedData(
+            req, transport: transport, netGuard: netGuard, bound: allowPrivate)
         guard (200..<300).contains(response.statusCode) else {
             throw OAuthError.registrationFailed("HTTP \(response.statusCode) \(shortBody(data))")
         }
@@ -253,14 +258,16 @@ public enum MCPOAuth {
 
     // MARK: - PKCE (RFC 7636)
 
+    typealias RandomBytes = @Sendable (_ count: Int) throws -> Data
+
     struct PKCE: Sendable {
         let verifier: String
         let challenge: String
 
-        init() {
-            var bytes = [UInt8](repeating: 0, count: 32)
-            _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-            verifier = Data(bytes).base64URLEncoded
+        init(randomBytes: RandomBytes = MCPOAuth.secureRandomBytes) throws {
+            let bytes = try randomBytes(32)
+            guard bytes.count == 32 else { throw OAuthError.secureRandomFailed }
+            verifier = bytes.base64URLEncoded
             challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
         }
     }
@@ -297,7 +304,7 @@ public enum MCPOAuth {
     /// Exchange the authorization code for tokens (PKCE verifier proves it is us).
     static func exchange(code: String, metadata: ServerMetadata, clientID: String, clientSecret: String,
                          redirectURI: String, resource: String, verifier: String,
-                         session: URLSession, netGuard: NetGuard, allowPrivate: Bool,
+                         transport: PinnedHTTPTransport, netGuard: NetGuard, allowPrivate: Bool,
                          timeout: TimeInterval,
                          now: Date = Date()) async throws -> (access: String, refresh: String, expiry: Date, scopes: String) {
         var form = [
@@ -309,12 +316,12 @@ public enum MCPOAuth {
             "resource": resource,
         ]
         if !clientSecret.isEmpty { form["client_secret"] = clientSecret }
-        return try await postToken(form, metadata: metadata, session: session, netGuard: netGuard,
+        return try await postToken(form, metadata: metadata, transport: transport, netGuard: netGuard,
                                    allowPrivate: allowPrivate, timeout: timeout, now: now)
     }
 
     /// Refreshes an access token and returns a rotated refresh token when supplied.
-    static func refresh(grant: Grant, session: URLSession, netGuard: NetGuard,
+    static func refresh(grant: Grant, transport: PinnedHTTPTransport, netGuard: NetGuard,
                         timeout: TimeInterval,
                         now: Date = Date()) async throws -> (access: String, refresh: String, expiry: Date, scopes: String) {
         // The same rule as the interactive flow: private token endpoints are
@@ -331,7 +338,7 @@ public enum MCPOAuth {
         let meta = ServerMetadata(issuer: grant.issuer, authorize: grant.authorizeEndpoint,
                                   token: grant.tokenEndpoint, registration: grant.registrationEndpoint,
                                   scopesSupported: grant.scopes)
-        let fresh = try await postToken(form, metadata: meta, session: session, netGuard: netGuard,
+        let fresh = try await postToken(form, metadata: meta, transport: transport, netGuard: netGuard,
                                         allowPrivate: allowPrivate, timeout: timeout, now: now)
         // A server that rotates gives a new refresh token; one that doesn't
         // expects the old one to keep working.
@@ -342,14 +349,13 @@ public enum MCPOAuth {
     }
 
     private static func postToken(_ form: [String: String], metadata: ServerMetadata,
-                                  session: URLSession, netGuard: NetGuard, allowPrivate: Bool,
+                                  transport: PinnedHTTPTransport, netGuard: NetGuard, allowPrivate: Bool,
                                   timeout: TimeInterval,
                                   now: Date) async throws -> (access: String, refresh: String, expiry: Date, scopes: String) {
         guard let url = URL(string: metadata.token) else {
             throw OAuthError.tokenFailed("bad token endpoint")
         }
         try requireSecure(url, allowPrivate: allowPrivate)
-        try netGuard.validate(host: url.host ?? "", bound: allowPrivate)
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = timeout
@@ -358,7 +364,8 @@ public enum MCPOAuth {
         req.httpBody = Data(form.map { "\(formEscape($0.key))=\(formEscape($0.value))" }
             .joined(separator: "&").utf8)
 
-        let (data, response) = try await Self.cappedData(req, session: session)
+        let (data, response) = try await Self.cappedData(
+            req, transport: transport, netGuard: netGuard, bound: allowPrivate)
         let http = response
         guard (200..<300).contains(http.statusCode) else {
             // Treat 400 or 401 during refresh as a revoked grant. Network and
@@ -366,10 +373,7 @@ public enum MCPOAuth {
             if form["grant_type"] == "refresh_token", (400...401).contains(http.statusCode) {
                 throw OAuthError.grantRevoked
             }
-            // Redact credentials submitted in the token request.
-            let submitted = ["refresh_token", "code", "code_verifier", "client_secret"]
-                .compactMap { form[$0] }.filter { !$0.isEmpty }.map { Data($0.utf8) }
-            throw OAuthError.tokenFailed("HTTP \(http.statusCode) \(shortBody(data, secrets: submitted))")
+            throw OAuthError.tokenFailed("HTTP \(http.statusCode) \(shortBody(data))")
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = json["access_token"] as? String, !access.isEmpty else {
@@ -388,22 +392,26 @@ public enum MCPOAuth {
     /// Maximum OAuth response body size. OAuth requests do not follow redirects.
     private static let maxOAuthBody = 1 << 20
 
-    static func cappedData(_ request: URLRequest, session: URLSession) async throws -> (Data, HTTPURLResponse) {
+    static func cappedData(_ request: URLRequest, transport: PinnedHTTPTransport,
+                           netGuard: NetGuard, bound: Bool) async throws -> (Data, HTTPURLResponse) {
+        guard let url = request.url else { throw OAuthError.discoveryFailed("bad request URL") }
+        let destination = try netGuard.destination(for: url, bound: bound)
         let policy = RedirectPolicy(origin: request.url?.hostPort ?? "",
                                     originScheme: request.url?.scheme?.lowercased() ?? "https",
                                     hasCredential: true, maxBody: maxOAuthBody)
-        return try await policy.loadCapped(request: request, session: session,
-                                           hardTimeout: request.timeoutInterval)
+        return try await transport.loadCapped(request: request, destination: destination,
+                                              policy: policy,
+                                              hardTimeout: request.timeoutInterval)
     }
 
-    private static func getJSON(_ url: URL, session: URLSession, netGuard: NetGuard,
+    private static func getJSON(_ url: URL, transport: PinnedHTTPTransport, netGuard: NetGuard,
                                 allowPrivate: Bool, timeout: TimeInterval) async throws -> [String: Any] {
         try requireSecure(url, allowPrivate: allowPrivate)
-        try netGuard.validate(host: url.host ?? "", bound: allowPrivate)
         var req = URLRequest(url: url)
         req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await Self.cappedData(req, session: session)
+        let (data, response) = try await Self.cappedData(
+            req, transport: transport, netGuard: netGuard, bound: allowPrivate)
         guard (200..<300).contains(response.statusCode) else {
             throw OAuthError.discoveryFailed("HTTP \(response.statusCode) at \(url.path)")
         }
@@ -435,18 +443,14 @@ public enum MCPOAuth {
         return comps?.url
     }
 
-    /// Returns redacted RFC 6749 `error` fields for a user-facing message.
-    static func shortBody(_ data: Data, secrets: [Data] = []) -> String {
+    /// Returns bounded RFC 6749 `error` fields for a user-facing message.
+    static func shortBody(_ data: Data) -> String {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "" }
         let code = (obj["error"] as? String) ?? ""
         let desc = (obj["error_description"] as? String) ?? ""
         let combined = [code, desc].filter { !$0.isEmpty }.joined(separator: ": ")
         guard !combined.isEmpty else { return "" }
-        // Redact submitted values and generic patterns before truncating.
-        var bytes = Data(combined.utf8)
-        if !secrets.isEmpty { (bytes, _) = DLP.redactWith(bytes, secrets: secrets) }
-        (bytes, _) = DLP.redact(bytes)
-        return "- \(String(String(decoding: bytes, as: UTF8.self).prefix(200)))"
+        return "- \(String(combined.prefix(200)))"
     }
 
     static func formEscape(_ s: String) -> String {
@@ -455,10 +459,21 @@ public enum MCPOAuth {
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
 
-    static func randomState() -> String {
-        var bytes = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return Data(bytes).base64URLEncoded
+    static func randomState(randomBytes: RandomBytes = secureRandomBytes) throws -> String {
+        let bytes = try randomBytes(16)
+        guard bytes.count == 16 else { throw OAuthError.secureRandomFailed }
+        return bytes.base64URLEncoded
+    }
+
+    static func secureRandomBytes(_ count: Int) throws -> Data {
+        guard count > 0 else { throw OAuthError.secureRandomFailed }
+        var bytes = Data(count: count)
+        let status = bytes.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return errSecParam }
+            return SecRandomCopyBytes(kSecRandomDefault, buffer.count, baseAddress)
+        }
+        guard status == errSecSuccess else { throw OAuthError.secureRandomFailed }
+        return bytes
     }
 }
 

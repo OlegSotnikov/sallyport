@@ -13,40 +13,33 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
-func TestCastRedactsSecretsSplitAcrossTransportChunks(t *testing.T) {
-	secret := "ghp_" + strings.Repeat("A", 32)
-	redactor := func(b []byte) ([]byte, int) {
-		if !bytes.Contains(b, []byte(secret)) {
-			return append([]byte(nil), b...), 0
-		}
-		return bytes.ReplaceAll(b, []byte(secret), []byte("REDACTED")), bytes.Count(b, []byte(secret))
-	}
+func TestCastPreservesTokenShapedOutputSplitAcrossTransportChunks(t *testing.T) {
+	token := "ghp_" + strings.Repeat("A", 32)
 	var dst bytes.Buffer
-	c, err := newCastWriter(&dst, 80, 24, redactor)
+	c, err := newCastWriter(&dst, 80, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.event("o", []byte(secret[:11]))
-	c.event("o", []byte(secret[11:]))
-	redactions, err := c.close()
-	if err != nil {
+	if err := c.event("o", []byte(token[:11])); err != nil {
 		t.Fatal(err)
 	}
-	if redactions != 1 {
-		t.Fatalf("redactions = %d, want 1", redactions)
+	if err := c.event("o", []byte(token[11:])); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(dst.String(), secret) || castEventData(t, dst.Bytes()) != "REDACTED" {
-		t.Fatalf("split secret was not redacted: %s", dst.String())
+	if err := c.close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := castEventData(t, dst.Bytes()); got != token {
+		t.Fatalf("split token-shaped output changed: got %q, want %q", got, token)
 	}
 	validateCastLines(t, dst.Bytes())
 }
 
 func TestCastConcurrentEventsAreSerializedAndComplete(t *testing.T) {
 	var dst bytes.Buffer
-	c, err := newCastWriter(&dst, 80, 24, nil)
+	c, err := newCastWriter(&dst, 80, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,11 +49,13 @@ func TestCastConcurrentEventsAreSerializedAndComplete(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.event("o", []byte("x"))
+			if err := c.event("o", []byte("x")); err != nil {
+				t.Errorf("event: %v", err)
+			}
 		}()
 	}
 	wg.Wait()
-	if _, err := c.close(); err != nil {
+	if err := c.close(); err != nil {
 		t.Fatal(err)
 	}
 	validateCastLines(t, dst.Bytes())
@@ -74,12 +69,12 @@ func TestCastConcurrentEventsAreSerializedAndComplete(t *testing.T) {
 
 func TestCastCloseSurfacesWriterFailure(t *testing.T) {
 	want := errors.New("disk full")
-	c, err := newCastWriter(failingWriter{err: want}, 80, 24, nil)
+	c, err := newCastWriter(failingWriter{err: want}, 80, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.event("o", bytes.Repeat([]byte("x"), 8<<10))
-	if _, err := c.close(); !errors.Is(err, want) {
+	_ = c.event("o", bytes.Repeat([]byte("x"), 8<<10))
+	if err := c.close(); !errors.Is(err, want) {
 		t.Fatalf("close error = %v, want %v", err, want)
 	}
 }
@@ -92,12 +87,14 @@ func TestCastFileModeIsPrivateEvenWhenReused(t *testing.T) {
 	if err := os.Chmod(path, 0o666); err != nil {
 		t.Fatal(err)
 	}
-	c, err := newCast(path, 80, 24, nil)
+	c, err := newCast(path, 80, 24)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.event("o", []byte("new"))
-	if _, err := c.close(); err != nil {
+	if err := c.event("o", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.close(); err != nil {
 		t.Fatal(err)
 	}
 	assertMode(t, path, 0o600)
@@ -113,7 +110,7 @@ func TestNewCastRejectsInvalidFilesystemTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{filepath.Join(parentFile, "session.cast"), directoryTarget} {
-		if _, err := newCast(path, 80, 24, nil); err == nil {
+		if _, err := newCast(path, 80, 24); err == nil {
 			t.Fatalf("newCast(%q) unexpectedly succeeded", path)
 		}
 	}
@@ -133,12 +130,11 @@ func TestNewCastRejectsSymlinksHardlinksFIFOsAndLinkedParent(t *testing.T) {
 			}
 			makeHostileFile(t, kind, path, target)
 			mustReturnErrorPromptly(t, func() error {
-				c, err := newCast(path, 80, 24, nil)
+				c, err := newCast(path, 80, 24)
 				if err != nil {
 					return err
 				}
-				_, closeErr := c.close()
-				return closeErr
+				return c.close()
 			})
 			assertFileUnchanged(t, target, "do-not-truncate", 0o644)
 		})
@@ -156,7 +152,7 @@ func TestNewCastRejectsSymlinksHardlinksFIFOsAndLinkedParent(t *testing.T) {
 		}
 		path := filepath.Join(linkedParent, "session.cast")
 		mustReturnErrorPromptly(t, func() error {
-			_, err := newCast(path, 80, 24, nil)
+			_, err := newCast(path, 80, 24)
 			return err
 		})
 		if _, err := os.Stat(filepath.Join(realParent, "session.cast")); !os.IsNotExist(err) {
@@ -247,26 +243,47 @@ func TestStreamWriterBoundsRetentionButCountsDrainedBytes(t *testing.T) {
 	if !errors.Is(w.err, io.ErrShortWrite) {
 		t.Fatalf("deferred sink error = %v, want ErrShortWrite", w.err)
 	}
+
+	want := errors.New("record sink failed")
+	rec, err := newCastWriter(failingWriter{err: want}, 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = &streamWriter{code: "o", rec: rec}
+	payload := bytes.Repeat([]byte("x"), maxCastEventBytes)
+	if n, err := w.Write(payload); err != nil || n != len(payload) {
+		t.Fatalf("recording sink Write = (%d, %v), want (%d, nil)", n, err, len(payload))
+	}
+	if !errors.Is(w.err, want) {
+		t.Fatalf("deferred recording error = %v, want %v", w.err, want)
+	}
+	_ = rec.close()
 }
 
-func TestCastCoalescesHostileTinyChunksToBoundEventMetadata(t *testing.T) {
-	c := &cast{start: time.Now()}
+func TestCastStreamsHostileTinyChunksWithBoundedPendingData(t *testing.T) {
+	var dst bytes.Buffer
+	c, err := newCastWriter(&dst, 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const bytesWritten = 2*maxCastEventBytes + 17
 	for i := 0; i < bytesWritten; i++ {
-		c.event("o", []byte{'x'})
-	}
-	if len(c.events) != 3 {
-		t.Fatalf("event count = %d, want 3 bounded chunks", len(c.events))
-	}
-	total := 0
-	for _, event := range c.events {
-		if len(event.data) > maxCastEventBytes {
-			t.Fatalf("event retained %d bytes, cap %d", len(event.data), maxCastEventBytes)
+		if err := c.event("o", []byte{'x'}); err != nil {
+			t.Fatal(err)
 		}
-		total += len(event.data)
+		if c.pending != nil && len(c.pending.data) > maxCastEventBytes {
+			t.Fatalf("pending event retained %d bytes, cap %d", len(c.pending.data), maxCastEventBytes)
+		}
 	}
-	if total != bytesWritten {
-		t.Fatalf("retained %d bytes, want %d", total, bytesWritten)
+	if err := c.close(); err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(dst.Bytes()), []byte("\n"))
+	if got := len(lines); got != 4 {
+		t.Fatalf("cast lines = %d, want one header + three bounded events", got)
+	}
+	if got := len(castEventData(t, dst.Bytes())); got != bytesWritten {
+		t.Fatalf("streamed %d bytes, want %d", got, bytesWritten)
 	}
 }
 

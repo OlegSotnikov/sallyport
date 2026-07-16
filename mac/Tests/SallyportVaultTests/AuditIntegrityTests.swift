@@ -26,6 +26,16 @@ private func row(_ tool: String, session: String = "", target: String = "") -> A
 @Suite("Audit — signed rows (forgery resistance)")
 struct AuditSignedRowTests {
 
+    @Test("legacy dlp_redactions fields remain readable but are not written")
+    func legacyDLPFieldIsIgnored() throws {
+        let legacy = Data(#"{"tool":"http.request","dlp_redactions":3}"#.utf8)
+        let event = try JSONDecoder().decode(AuditEvent.self, from: legacy)
+        #expect(event.tool == "http.request")
+        #expect(!event.canonicalString.contains("dlp_redactions"))
+        let encoded = try JSONEncoder().encode(event)
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("dlp_redactions"))
+    }
+
     @Test("rows are signed; verification against the right key passes, a foreign key fails")
     func signAndVerify() throws {
         let dir = try freshDir()

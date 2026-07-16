@@ -99,7 +99,7 @@ Locked data screens show an unlock state because their content is sealed. Sessio
 - audit sealing, signatures, anchors, rollback detection, and quarantine;
 - HTTP credential injection, redirects, network guard, and output limits;
 - SSH helper boundary, agent signing, host keys, recordings, and import;
-- stdio and remote MCP upstreams, OAuth, and output redaction;
+- stdio and remote MCP upstreams, OAuth, response fidelity, and resource limits;
 - management models and operations;
 - approval and app-state safety logic.
 
