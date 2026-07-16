@@ -21,6 +21,9 @@ public final class SocketServer: @unchecked Sendable {
     private let invokeTimeout: TimeInterval
     private let catalogTimeout: TimeInterval
     private let tools: @Sendable () async -> [JSONValue]
+    /// Confirms per frame that the peer is still the process instance that
+    /// connected. Injectable so tests can simulate a reused PID.
+    private let peerAlive: @Sendable (Provenance.PeerIdentity) -> Bool
     private var listenFD: Int32 = -1
     private var ownershipFD: Int32 = -1
     private var socketIdentity: (dev: dev_t, ino: ino_t)?
@@ -38,12 +41,16 @@ public final class SocketServer: @unchecked Sendable {
             await engine.invoke(identity: identity, action: action, provenance: provenance)
         }
         self.tools = tools
+        self.peerAlive = { Provenance.alive(pid: $0.pid, startedAt: $0.startedAt) }
     }
 
     /// Timeout override for tests.
     init(path: String, invokeTimeout: TimeInterval,
          catalogTimeout: TimeInterval = SocketServer.catalogTimeoutSeconds,
          tools: @escaping @Sendable () async -> [JSONValue],
+         peerAlive: @escaping @Sendable (Provenance.PeerIdentity) -> Bool = {
+             Provenance.alive(pid: $0.pid, startedAt: $0.startedAt)
+         },
          invokeAction: @escaping @Sendable (String, Action, Provenance) async -> InvokeResult) {
         self.path = path
         self.invokeTimeout = invokeTimeout.isFinite
@@ -52,6 +59,7 @@ public final class SocketServer: @unchecked Sendable {
             ? min(max(0, catalogTimeout), Self.catalogTimeoutSeconds) : 0
         self.invokeAction = invokeAction
         self.tools = tools
+        self.peerAlive = peerAlive
     }
 
     /// Bind the socket (0700 inside a 0700 dir) and start accepting.
@@ -135,6 +143,9 @@ public final class SocketServer: @unchecked Sendable {
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw SocketError.create(errno) }
+        // The listener must not leak into helper children (Foundation Process
+        // spawns without a CLOEXEC default).
+        _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         _ = path.withCString { src in
@@ -217,6 +228,8 @@ public final class SocketServer: @unchecked Sendable {
                     return
                 }
             }
+            // An authenticated connection must not leak into helper children.
+            _ = fcntl(conn, F_SETFD, FD_CLOEXEC)
             // A dead peer must fail the write with EPIPE, not SIGPIPE-kill the app
             // (the exact scenario: agent exits while its call awaits approval).
             var one: Int32 = 1
@@ -240,19 +253,26 @@ public final class SocketServer: @unchecked Sendable {
                 continue
             }
 
-            let peer = Provenance.peerPID(fromFD: conn)
+            // Pin the peer to one process instance at accept. A peer that is
+            // already gone cannot be attested — fail closed instead of walking
+            // a chain that may start at a reused PID.
+            guard let peer = Provenance.peerIdentity(fromFD: conn) else {
+                _ = stateLock.withLock { activeConnections.remove(conn) }
+                close(conn)
+                continue
+            }
             Thread.detachNewThread { [weak self] in
                 guard let self else { close(conn); return }
                 defer {
                     _ = self.stateLock.withLock { self.activeConnections.remove(conn) }
                     close(conn)
                 }
-                self.serve(conn: conn, peerPID: peer)
+                self.serve(conn: conn, peer: peer)
             }
         }
     }
 
-    private func serve(conn: Int32, peerPID: Int) {
+    private func serve(conn: Int32, peer: Provenance.PeerIdentity) {
         var framer = LineFramer()
         var buf = [UInt8](repeating: 0, count: 64 * 1024)
         var partialFrameStartedAt: UInt64?
@@ -272,7 +292,7 @@ public final class SocketServer: @unchecked Sendable {
                 partialFrameStartedAt = nil
             }
             for line in lines where !line.isEmpty {
-                if let reply = handle(line, peerPID: peerPID, conn: conn) {
+                if let reply = handle(line, peer: peer, conn: conn) {
                     var out = reply
                     out.append(0x0A)
                     // A stream write may be partial, so continue until the frame is sent.
@@ -340,7 +360,7 @@ public final class SocketServer: @unchecked Sendable {
     }
 
     /// Dispatches one frame and replies unless the peer disconnects.
-    private func handle(_ line: Data, peerPID: Int, conn: Int32) -> Data? {
+    private func handle(_ line: Data, peer: Provenance.PeerIdentity, conn: Int32) -> Data? {
         guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let type = obj["type"] as? String else {
             return encode(["type": "error", "error": "bad frame: expected one JSON object per line"])
@@ -389,8 +409,18 @@ public final class SocketServer: @unchecked Sendable {
                 return invokeReply(id: id, result: .denied(
                     "SALLYPORT_BAD_REQUEST", "action.args exceeds JSON resource limits"))
             }
+            // The connection authenticates one process instance. A frame from
+            // a PID that no longer belongs to that instance (reuse after the
+            // shim died with an inherited descriptor) must not be attributed
+            // to the connect-time identity.
+            guard peerAlive(peer) else {
+                return invokeReply(id: id, result: .denied(
+                    "SALLYPORT_PROVENANCE",
+                    "the requesting process is no longer the process that connected",
+                    rule: "server.peer"))
+            }
             let action = Action(tool: tool, args: args)
-            let prov = Provenance.chain(pid: peerPID)
+            let prov = Provenance.chain(peer: peer)
 
             let sem = DispatchSemaphore(value: 0)
             let box = ResultBox()

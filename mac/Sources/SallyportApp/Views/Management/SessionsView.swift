@@ -8,6 +8,8 @@ final class SessionsViewModel {
     let mgmt: MgmtClient
     var sessions: [SessionInfo] = []
     var history: [SessionInfo] = []
+    /// Current allowlist, for recognizing an updated pinned agent.
+    var allowlist: [AllowlistItem] = []
     var isLoading = false
     var error: String?
     var toast: Toast?
@@ -21,6 +23,7 @@ final class SessionsViewModel {
             history = try await mgmt.sessionsHistory()
         }
         catch { self.error = describe(error) }
+        allowlist = (try? await mgmt.listAllowlist()) ?? []
         isLoading = false
     }
 
@@ -59,6 +62,8 @@ struct SessionsView: View {
     @State private var pendingRevoke: SessionInfo?
     /// Code identity captured for an allowlist entry.
     @State private var pendingCapture: AllowlistCapturePreview?
+    /// Kernel process name of the captured session, for runtime context.
+    @State private var pendingName = ""
     /// Session whose process has no visible window.
     @State private var revealMiss: String?
     let locked: Bool
@@ -85,7 +90,9 @@ struct SessionsView: View {
         )
         .toast($vm.toast)
         .sheet(item: $pendingCapture) { cap in
-            AllowlistConfirmSheet(capture: cap) { item in await vm.addToAllowlist(item) }
+            AllowlistConfirmSheet(capture: cap, existing: vm.allowlist, originName: pendingName) {
+                item in await vm.addToAllowlist(item)
+            }
         }
         .task(id: locked) { if !locked { await vm.load() } }
         .task {
@@ -166,6 +173,7 @@ struct SessionsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Text(verbatim: s.displayName).fontWeight(.medium).textSelection(.enabled)
                     statusPill(s.status)
+                    runtimePill(s)
                 }
                 Text(verbatim: subtitle(s, live: live))
                     .font(.caption).foregroundStyle(.secondary)
@@ -189,7 +197,12 @@ struct SessionsView: View {
 
             if live {
                 Button {
-                    Task { if let cap = await vm.captureForAllowlist(pid: s.pid) { pendingCapture = cap } }
+                    Task {
+                        if let cap = await vm.captureForAllowlist(pid: s.pid) {
+                            pendingName = s.name
+                            pendingCapture = cap
+                        }
+                    }
                 } label: {
                     Image(systemName: "person.badge.key")
                 }
@@ -247,6 +260,20 @@ struct SessionsView: View {
         case "per-call": StatusPill("Per call", tint: Theme.warning)
         case "observed": StatusPill("Observed", tint: .secondary)
         default: StatusPill(verbatim: status, tint: .secondary)
+        }
+    }
+
+    /// Marks a session whose identity is a runtime, not one agent.
+    @ViewBuilder private func runtimePill(_ s: SessionInfo) -> some View {
+        switch RuntimeClassifier.classify(path: "", name: s.name) {
+        case .interpreter:
+            StatusPill("Interpreter", tint: Theme.warning)
+                .help("Every script this runtime executes shares this identity.")
+        case .shell:
+            StatusPill("Shell", tint: Theme.warning)
+                .help("The process is a shell, typically a command another program ran.")
+        case nil:
+            EmptyView()
         }
     }
 

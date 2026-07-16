@@ -44,6 +44,8 @@ Losing the Secure Enclave key or device loses the vault. Recreate it and reissue
 
 A session represents one live process. Its identity uses kernel-observed PID and start time plus executable and code-signing data. Sallyport revalidates live identity on later calls.
 
+The control socket pins each connection to one peer process instance at accept: the connect-time audit token (`LOCAL_PEERTOKEN`) plus kernel start time. Every `invoke` frame re-validates that the peer PID still belongs to that instance and is denied (`server.peer`) otherwise, so a descriptor that outlives its shim cannot attribute frames through a reused PID. Code-signing guest lookups for the peer use the audit token rather than the reusable PID. Connection descriptors are `FD_CLOEXEC` on both ends.
+
 An approved session lasts until process exit, revoke, vault lock, or app exit. Sessions are never persisted.
 
 ### Per-call approval
@@ -63,7 +65,9 @@ An allowlist entry is either:
 
 Entries may be scoped to hosts. Sallyport matches them against the live process on each call. A match skips only the session card. It does not bypass vault state, host binding, per-call approval, audit, or lifecycle checks.
 
-Adding or removing an allowlist entry always requires Touch ID. The allowlist is sealed under the DEK.
+Adding, updating, or removing an allowlist entry always requires Touch ID. The allowlist is sealed under the DEK.
+
+Two management conveniences change nothing in the gate itself. A known-agents registry (label, bundle ID, Team ID, standard install paths for Claude Desktop, Claude Code, Codex CLI) locates binaries and cross-checks captures; entries are still captured from the binary on disk and verified by Security.framework. When a captured identity carries the same valid Team ID and bundle ID as an existing cdhash entry but a new hash — the pinned agent updated — the UI offers a one-ceremony pin replacement that keeps the entry's scope.
 
 An allowlist authenticates process identity, not intent. With an inherited descriptor, Sallyport cannot prove which component authored each byte.
 

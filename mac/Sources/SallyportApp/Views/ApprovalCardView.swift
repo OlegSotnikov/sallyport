@@ -28,6 +28,7 @@ struct ApprovalCardView: View {
             if isIntact { modeStrip }
             OriginHeader(request: request)
             if isSession || isPerCall { signatureBanner }
+            runtimeStrip
             // A credential request collects the specific key in the next sheet.
             if request.action.tool != "sallyport.request_credential" { actionBlock }
             // Verified requests disclose session scope in the mode strip. Keep
@@ -64,6 +65,25 @@ struct ApprovalCardView: View {
             contextStrip(icon: "touchid", tint: Theme.warning, title: "Per-call approval with Touch ID",
                          detail: Text("This call requires Touch ID."))
         default:
+            EmptyView()
+        }
+    }
+
+    /// Flags an origin whose code signature names a runtime, not one agent:
+    /// a shell or interpreter identity covers every script on the machine, so
+    /// the user must judge the request by its content, not the signer.
+    @ViewBuilder private var runtimeStrip: some View {
+        let origin = request.provenance.origin
+        switch RuntimeClassifier.classify(path: origin.path ?? "", name: origin.name) {
+        case .interpreter:
+            contextStrip(icon: "curlybraces", tint: Theme.warning,
+                         title: "Interpreter process",
+                         detail: Text("Every script this runtime executes shares this identity. It does not name one agent."))
+        case .shell:
+            contextStrip(icon: "terminal", tint: Theme.warning,
+                         title: "Launched through a shell",
+                         detail: Text("The requesting process is a shell, typically a command another program ran."))
+        case nil:
             EmptyView()
         }
     }
@@ -115,6 +135,13 @@ struct ApprovalCardView: View {
                 }
                 if let path = request.provenance.origin.path, !path.isEmpty {
                     Text(verbatim: path).font(Theme.Typography.monoSmall).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                }
+                if let cwd = request.provenance.origin.cwd, !cwd.isEmpty {
+                    Text(LocalizedStringResource(
+                        "in \(cwd)",
+                        comment: "Working directory of the requesting process, shown under its executable path."))
+                        .font(Theme.Typography.monoSmall).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 }
             }

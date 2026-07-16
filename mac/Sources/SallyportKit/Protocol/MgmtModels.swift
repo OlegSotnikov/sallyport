@@ -350,6 +350,18 @@ public struct AllowlistCapturePreview: Codable, Sendable, Hashable {
         self.bundleID = bundleID; self.signed = signed; self.authority = authority
         self.capturedFrom = capturedFrom; self.publisherRequirement = publisherRequirement
     }
+
+    /// An existing pinned (cdhash) entry for the same signed identity whose
+    /// pin no longer contains this build — the agent updated. Publisher
+    /// continuity requires a valid signature and a Team ID; a different or
+    /// missing signer never claims someone else's pin.
+    public func stalePin(in existing: [AllowlistItem]) -> AllowlistItem? {
+        guard signed, !teamID.isEmpty, !cdhashes.isEmpty else { return nil }
+        return existing.first { e in
+            e.kind == "cdhash" && e.teamID == teamID && e.bundleID == bundleID
+                && Set(e.cdhashes).isDisjoint(with: cdhashes)
+        }
+    }
 }
 
 public struct Host: Codable, Sendable, Hashable, Identifiable {

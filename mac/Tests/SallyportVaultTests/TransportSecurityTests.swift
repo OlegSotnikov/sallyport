@@ -682,6 +682,43 @@ struct ControlSocketSecurityTests {
         #expect(recovered["type"] as? String == "list_tools_result")
     }
 
+    @Test("a frame from a peer that changed identity is denied before the engine")
+    func staleConnectionPeerIsDenied() async throws {
+        let root = URL(fileURLWithPath: "/tmp/sp-peer-pin-\(UUID().uuidString.prefix(8))",
+                       isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let path = root.appendingPathComponent("sallyport.sock").path
+        let invoked = TransportFlag()
+        // The injected check models the reuse race: the connect-time peer is
+        // gone and its PID belongs to another process by the time the frame
+        // arrives (a descriptor inherited across the shim's death).
+        let server = SocketServer(
+            path: path, invokeTimeout: 1, tools: { [] },
+            peerAlive: { _ in false }) { _, _, _ in
+            invoked.set()
+            return InvokeResult(ok: true)
+        }
+        try server.start()
+        defer {
+            server.stop()
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let reply = try TestSocketClient.request(path, [
+            "type": "invoke", "id": "stale-peer",
+            "action": ["tool": "test.pin", "args": [:]],
+        ])
+        let result = try #require(reply["result"] as? [String: Any])
+        #expect(result["error_code"] as? String == "SALLYPORT_PROVENANCE")
+        #expect(result["rule"] as? String == "server.peer")
+        #expect(!invoked.value, "a stale peer must never reach the engine")
+
+        // The catalog is not identity-gated; the connection itself stays sane.
+        let catalog = try TestSocketClient.request(path, ["type": "list_tools", "id": "c"])
+        #expect(catalog["type"] as? String == "list_tools_result")
+    }
+
     @Test("deep action arguments fail closed before the engine is invoked")
     func boundedActionArguments() async throws {
         let root = URL(fileURLWithPath: "/tmp/sp-json-depth-\(UUID().uuidString.prefix(8))",

@@ -19,11 +19,16 @@ public struct Origin: Sendable, Codable, Hashable {
     /// Code-signing authority. Empty when unsigned or unavailable.
     public var signedBy: String
     public var validSignature: Bool
+    /// Working directory at capture time. Human decision context only — a
+    /// process can chdir at will, so this is never an authorization input.
+    public var cwd: String
 
     public init(pid: Int = 0, startedAt: Int64 = 0, name: String = "", path: String = "",
-                appName: String = "", signedBy: String = "", validSignature: Bool = false) {
+                appName: String = "", signedBy: String = "", validSignature: Bool = false,
+                cwd: String = "") {
         self.pid = pid; self.startedAt = startedAt; self.name = name; self.path = path
         self.appName = appName; self.signedBy = signedBy; self.validSignature = validSignature
+        self.cwd = cwd
     }
 }
 
@@ -63,9 +68,11 @@ extension Provenance {
     private static let maxDepth = 16
 
     /// sys/un.h constants, spelled out because the C macros don't reliably
-    /// import into Swift. Stable Darwin ABI: SOL_LOCAL = 0, LOCAL_PEERPID = 2.
+    /// import into Swift. Stable Darwin ABI: SOL_LOCAL = 0, LOCAL_PEERPID = 2,
+    /// LOCAL_PEERTOKEN = 6.
     private static let solLocal: Int32 = 0
     private static let localPeerPID: Int32 = 0x002
+    private static let localPeerToken: Int32 = 0x006
 
     /// Returns the peer PID from `LOCAL_PEERPID`, or 0 on failure.
     public static func peerPID(fromFD fd: Int32) -> Int {
@@ -75,8 +82,52 @@ extension Provenance {
         return Int(pid)
     }
 
+    /// A connected peer pinned to one process instance: the PID alone is a
+    /// reusable number, so the kernel start time (and, when available, the
+    /// connect-time audit token) travel with it for later re-validation.
+    public struct PeerIdentity: Sendable, Hashable {
+        public var pid: Int
+        /// Kernel start time of the peer, unix ns (anti-reuse).
+        public var startedAt: Int64
+        /// Raw `audit_token_t` bytes from `LOCAL_PEERTOKEN` for reuse-proof
+        /// `SecCode` guest lookup. nil when the platform call failed and the
+        /// PID came from `LOCAL_PEERPID`.
+        public var auditToken: Data?
+    }
+
+    /// Captures the connected peer's identity, preferring the audit token
+    /// (which carries the process generation) over the bare PID. Returns nil
+    /// when the peer is already gone — callers must fail closed.
+    public static func peerIdentity(fromFD fd: Int32) -> PeerIdentity? {
+        var pid = 0
+        var tokenData: Data?
+        var token = audit_token_t()
+        var len = socklen_t(MemoryLayout<audit_token_t>.size)
+        if getsockopt(fd, solLocal, localPeerToken, &token, &len) == 0,
+           len == socklen_t(MemoryLayout<audit_token_t>.size) {
+            // Stable Darwin ABI: audit_token_t.val[5] is the PID.
+            pid = Int(token.val.5)
+            tokenData = withUnsafeBytes(of: token) { Data($0) }
+        } else {
+            pid = peerPID(fromFD: fd)
+        }
+        guard pid > 0, let kp = kinfo(pid: pid) else { return nil }
+        return PeerIdentity(pid: pid, startedAt: startNanos(kp), auditToken: tokenData)
+    }
+
+    /// Walks the process parent chain from a pinned socket peer. The peer's
+    /// audit token, when present, replaces the reusable PID in code-signing
+    /// lookups for the peer's own hop.
+    public static func chain(peer: PeerIdentity) -> Provenance {
+        chain(pid: peer.pid, peerToken: peer.auditToken)
+    }
+
     /// Walks the process parent chain from `pid`.
     public static func chain(pid: Int) -> Provenance {
+        chain(pid: pid, peerToken: nil)
+    }
+
+    static func chain(pid: Int, peerToken: Data?) -> Provenance {
         var hops: [Hop] = []
         var cur = pid
         for _ in 0..<maxDepth {
@@ -95,11 +146,14 @@ extension Provenance {
         }
         var prov = Provenance(chain: hops)
         // Skip the Sallyport shim when selecting the requesting process.
-        if let h = originHop(hops) {
+        if let h = originHop(hops, peerPID: pid, peerToken: peerToken) {
             var o = Origin(pid: h.pid, startedAt: h.startedAt, name: h.name, path: h.path)
             o.appName = appName(fromPath: h.path)
+            o.cwd = cwdPath(pid: h.pid)
             // Verify the running code rather than the replaceable file path.
-            let sig = codesign(pid: h.pid, path: h.path)
+            // A direct connection (origin == peer) uses the audit token.
+            let sig = codesign(pid: h.pid, path: h.path,
+                               auditToken: h.pid == pid ? peerToken : nil)
             o.validSignature = sig.valid
             o.signedBy = sig.authority
             prov.origin = o
@@ -116,18 +170,20 @@ extension Provenance {
     // MARK: Chain internals (internal for tests)
 
     /// First process outside the Sallyport shim.
-    static func originHop(_ hops: [Hop]) -> Hop? {
+    static func originHop(_ hops: [Hop], peerPID: Int = 0, peerToken: Data? = nil) -> Hop? {
         guard let first = hops.first else { return nil }
-        return hops.first { !isSallyportShim($0) } ?? first
+        return hops.first {
+            !isSallyportShim($0, auditToken: $0.pid == peerPID ? peerToken : nil)
+        } ?? first
     }
 
     /// Whether the running process is the Sallyport shim signed by this app's team.
-    static func isSallyportShim(_ h: Hop) -> Bool {
+    static func isSallyportShim(_ h: Hop, auditToken: Data? = nil) -> Bool {
         var base = h.path
         if let i = base.lastIndex(of: "/") { base = String(base[base.index(after: i)...]) }
         guard h.name == "sp" || base == "sp" else { return false }   // pre-filter
         guard let team = ourTeam() else { return true }   // ad-hoc dev: trust the name
-        return liveCodeSatisfies(pid: h.pid,
+        return liveCodeSatisfies(pid: h.pid, auditToken: auditToken,
             requirement: "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"")
     }
 
@@ -144,10 +200,11 @@ extension Provenance {
     }
 
     /// Whether the running code for `pid` satisfies a signing requirement.
-    static func liveCodeSatisfies(pid: Int, requirement: String) -> Bool {
+    /// An audit token, when supplied, replaces the reusable PID as the guest key.
+    static func liveCodeSatisfies(pid: Int, auditToken: Data? = nil, requirement: String) -> Bool {
         guard pid > 0 else { return false }
         var codeRef: SecCode?
-        let attrs = [kSecGuestAttributePid as String: pid] as CFDictionary
+        let attrs = guestAttributes(pid: pid, auditToken: auditToken)
         guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &codeRef) == errSecSuccess, let code = codeRef else {
             return false
         }
@@ -206,6 +263,15 @@ extension Provenance {
         let attrs = [kSecGuestAttributePid as String: pid] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &codeRef) == errSecSuccess else { return nil }
         return codeRef
+    }
+
+    /// Guest lookup attributes: the audit token when available (immune to PID
+    /// reuse), the PID otherwise.
+    static func guestAttributes(pid: Int, auditToken: Data?) -> CFDictionary {
+        if let auditToken {
+            return [kSecGuestAttributeAudit as String: auditToken] as CFDictionary
+        }
+        return [kSecGuestAttributePid as String: pid] as CFDictionary
     }
 
     private static func signingInfo(_ sc: SecStaticCode) -> [String: Any]? {
@@ -329,6 +395,18 @@ extension Provenance {
         return ""
     }
 
+    /// The process's current working directory via `proc_pidinfo`, or "".
+    /// Display context only, never an authorization input.
+    static func cwdPath(pid: Int) -> String {
+        guard let p = Int32(exactly: pid), p > 0 else { return "" }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(p, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return "" }
+        return withUnsafeBytes(of: info.pvi_cdir.vip_path) { raw in
+            String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+        }
+    }
+
     /// A process's kernel start time as unix nanoseconds, read from
     /// kinfo_proc.kp_proc.p_starttime (a timeval). Paired with the PID it is a
     /// reuse-proof identity.
@@ -359,14 +437,16 @@ extension Provenance {
     private static let sigCache = OSAllocatedUnfairLock(initialState: [String: SigResult]())
 
     /// Validates running code and returns its leaf-certificate subject.
-    /// A missing PID does not fall back to path validation.
-    public static func codesign(pid: Int, path: String) -> (valid: Bool, authority: String) {
+    /// A missing PID does not fall back to path validation. An audit token,
+    /// when supplied, replaces the reusable PID as the guest key.
+    public static func codesign(pid: Int, path: String,
+                                auditToken: Data? = nil) -> (valid: Bool, authority: String) {
         guard pid > 0 else { return codesign(path: path) }
         // Retry transient guest lookup failures. An unsigned process can still
         // resolve successfully with an empty authority.
         for attempt in 0..<5 {
             var codeRef: SecCode?
-            let attrs = [kSecGuestAttributePid as String: pid] as CFDictionary
+            let attrs = guestAttributes(pid: pid, auditToken: auditToken)
             guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &codeRef) == errSecSuccess,
                   let code = codeRef else {
                 if attempt < 4 { usleep(300); continue }

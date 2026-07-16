@@ -676,7 +676,8 @@ final class AppModel: Approver, CredentialPrompter {
             pid: o.pid, name: label,
             path: o.path.isEmpty ? nil : o.path, ppid: nil,
             appName: o.appName.isEmpty ? nil : o.appName,
-            validSignature: o.validSignature, signedBy: o.signedBy.isEmpty ? nil : o.signedBy)
+            validSignature: o.validSignature, signedBy: o.signedBy.isEmpty ? nil : o.signedBy,
+            cwd: o.cwd.isEmpty ? nil : o.cwd)
         let chain = req.chain.map { h in
             ProcessHop(pid: h.pid, name: h.name, path: h.path.isEmpty ? nil : h.path,
                        ppid: h.ppid == 0 ? nil : h.ppid)

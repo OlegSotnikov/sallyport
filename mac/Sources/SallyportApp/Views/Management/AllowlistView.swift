@@ -70,15 +70,18 @@ struct AllowlistView: View {
             onUnlock: onUnlock,
             onRefresh: { Task { await vm.load() } },
             toolbar: {
-                Button { pickFile() } label: { Label("Add from app…", systemImage: "plus") }
-                    .buttonStyle(.borderedProminent)
+                HStack(spacing: Theme.Spacing.sm) {
+                    knownAgentsMenu
+                    Button { pickFile() } label: { Label("Add from app…", systemImage: "plus") }
+                        .buttonStyle(.borderedProminent)
+                }
             },
             content: { content }
         )
         .toast($vm.toast)
         .task(id: locked) { if !locked { await vm.load() } }
         .sheet(item: $pending) { cap in
-            AllowlistConfirmSheet(capture: cap) { item in await vm.add(item) }
+            AllowlistConfirmSheet(capture: cap, existing: vm.items) { item in await vm.add(item) }
         }
         .confirmationDialog(
             "Remove '\(pendingDelete?.label ?? "")' from the allowlist?",
@@ -109,6 +112,27 @@ struct AllowlistView: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.md)
+        }
+    }
+
+    /// One-click strict entries for agents found at their standard install
+    /// paths. Each choice still runs the normal capture + Touch ID flow —
+    /// the registry only locates the binary and cross-checks the signer.
+    @ViewBuilder private var knownAgentsMenu: some View {
+        let found = KnownAgents.installed()
+        if !found.isEmpty {
+            Menu {
+                ForEach(found, id: \.agent.id) { pair in
+                    Button {
+                        Task { if let cap = await vm.capture(path: pair.path) { pending = cap } }
+                    } label: {
+                        Text(verbatim: pair.agent.label)
+                    }
+                }
+            } label: {
+                Label("Known agents", systemImage: "sparkles")
+            }
+            .help("Agents detected on this Mac. Their signing identity is verified at capture time.")
         }
     }
 
@@ -167,17 +191,48 @@ private struct AllowlistRow: View {
 /// Confirms the code identity, match type, and host scope for an allowlist entry.
 struct AllowlistConfirmSheet: View {
     let capture: AllowlistCapturePreview
+    /// Current entries, for recognizing a pinned agent that only updated.
+    var existing: [AllowlistItem] = []
+    /// Kernel process name when captured from a live session ("" otherwise).
+    var originName: String = ""
     let onAdd: (AllowlistItem) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
-    @State private var usePublisher = false
-    @State private var scope = ""
+    @State private var usePublisher: Bool
+    @State private var scope: String
     @State private var isBusy = false
 
+    init(capture: AllowlistCapturePreview, existing: [AllowlistItem] = [],
+         originName: String = "", onAdd: @escaping (AllowlistItem) async -> Bool) {
+        self.capture = capture
+        self.existing = existing
+        self.originName = originName
+        self.onAdd = onAdd
+        // A known publisher pre-selects the rule that survives its updates;
+        // an update of a pinned entry keeps that entry's scope and stays a pin.
+        let stale = capture.stalePin(in: existing)
+        let known = KnownAgents.match(teamID: capture.teamID, bundleID: capture.bundleID)
+        _usePublisher = State(initialValue: stale == nil && known != nil
+                              && capture.publisherRequirement != nil)
+        _scope = State(initialValue: stale?.scopeHosts.joined(separator: ", ") ?? "")
+    }
+
     private var canPublisher: Bool { capture.publisherRequirement != nil }
+    private var knownAgent: KnownAgent? {
+        capture.signed ? KnownAgents.match(teamID: capture.teamID, bundleID: capture.bundleID) : nil
+    }
+    /// An existing pinned entry this capture updates (see `stalePin(in:)`).
+    private var stalePin: AllowlistItem? { capture.stalePin(in: existing) }
+
+    private var runtimeClass: RuntimeClass? {
+        let path = capture.capturedFrom.hasPrefix("live:") ? "" : capture.capturedFrom
+        return RuntimeClassifier.classify(path: path,
+                                          name: originName.isEmpty ? capture.label : originName)
+    }
 
     var body: some View {
-        SheetScaffold("Allowlist this agent", systemImage: "person.2.badge.key") {
+        SheetScaffold(stalePin == nil ? "Allowlist this agent" : "Update pinned agent",
+                      systemImage: "person.2.badge.key") {
             VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                 labeled("Agent", capture.label)
                 labeled("Signed", capture.signed
@@ -186,6 +241,25 @@ struct AllowlistConfirmSheet: View {
                 if !capture.teamID.isEmpty { labeled("Team", capture.teamID) }
                 if !capture.bundleID.isEmpty { labeled("Bundle", capture.bundleID) }
                 labeled("From", capture.capturedFrom)
+
+                if let known = knownAgent {
+                    Label("Signature matches the known publisher of \(known.label).",
+                          systemImage: "checkmark.seal.fill")
+                        .font(.caption).foregroundStyle(Theme.verified)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let stale = stalePin {
+                    Label("“\(stale.label)” is already pinned with an older build of this identity. Saving replaces that pin with this build and keeps its scope.",
+                          systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption).foregroundStyle(Theme.accent)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if runtimeClass != nil {
+                    Label("This executable is a script runtime. Its identity covers every script it runs, not one agent.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if !capture.signed {
                     Label("This executable has no valid code signature. Verify it before allowlisting.",
@@ -234,7 +308,9 @@ struct AllowlistConfirmSheet: View {
                 }
             }
         } footer: {
-            SheetButtons(saveTitle: "Add to allowlist (Touch ID)", isBusy: isBusy, isDisabled: false,
+            SheetButtons(saveTitle: stalePin == nil
+                            ? "Add to allowlist (Touch ID)" : "Update pin (Touch ID)",
+                         isBusy: isBusy, isDisabled: false,
                          onCancel: { dismiss() }, onSave: submit)
         }
     }
@@ -250,8 +326,11 @@ struct AllowlistConfirmSheet: View {
         isBusy = true
         let hosts = scope.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let publisher = usePublisher && canPublisher
+        // Reusing a stale pin's id makes this an in-place update (the store
+        // upserts by id), so one Touch ID replaces the outdated pin.
         let item = AllowlistItem(
-            label: capture.label,
+            id: stalePin?.id ?? "",
+            label: stalePin?.label ?? capture.label,
             kind: publisher ? "publisher" : "cdhash",
             teamID: capture.teamID, bundleID: capture.bundleID,
             cdhashes: publisher ? [] : capture.cdhashes,

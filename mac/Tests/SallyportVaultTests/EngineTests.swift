@@ -329,7 +329,12 @@ struct EngineTests {
                 _ = await store.beginLock(expectedEpoch: admissionEpoch)
                 finished.signal()
             }
-            #expect(finished.wait(timeout: .now() + 5) == .success)
+            // This wait blocks a cooperative-pool thread while beginLock needs
+            // another one. A parallel full-suite run can starve the pool for
+            // seconds, so the budget must absorb load spikes: a short budget
+            // times out, the hook returns, admission wins the race, and the
+            // test fails without exercising the scenario at all.
+            #expect(finished.wait(timeout: .now() + 30) == .success)
         }
 
         let result = await engine.invoke(identity: "agent://t", action: get(), provenance: prov)

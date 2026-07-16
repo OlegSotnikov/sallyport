@@ -70,11 +70,14 @@ public struct ProcessHop: Sendable, Hashable, Codable, Identifiable {
     public var validSignature: Bool?
     /// Code-signing authority. Nil when unsigned or unavailable.
     public var signedBy: String?
+    /// Working directory at capture time. Decision context only.
+    public var cwd: String?
 
     public var id: Int { pid }
 
     public init(pid: Int, name: String, path: String? = nil, ppid: Int? = nil,
-                appName: String? = nil, validSignature: Bool? = nil, signedBy: String? = nil) {
+                appName: String? = nil, validSignature: Bool? = nil, signedBy: String? = nil,
+                cwd: String? = nil) {
         self.pid = pid
         self.name = name
         self.path = path
@@ -82,6 +85,7 @@ public struct ProcessHop: Sendable, Hashable, Codable, Identifiable {
         self.appName = appName
         self.validSignature = validSignature
         self.signedBy = signedBy
+        self.cwd = cwd
     }
 }
 

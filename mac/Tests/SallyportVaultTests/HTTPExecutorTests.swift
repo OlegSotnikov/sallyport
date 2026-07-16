@@ -184,7 +184,10 @@ struct HTTPExecutorTests {
             _ = try await e.execute(httpAction(url: "https://192.0.2.1/"),
                                     resolve: { _, _ in nil })
         }
-        #expect(ContinuousClock.now - started < .seconds(1))
+        // Generous on purpose (100× the 0.05s deadline): this asserts "the
+        // deadline fired instead of the 60s stall", and a tight ceiling turns
+        // parallel-suite scheduling delays into flakes.
+        #expect(ContinuousClock.now - started < .seconds(5))
         #expect(MockHTTP.startCount.current > 0, "the transport must start before the deadline")
         let cancellationDeadline = ContinuousClock.now + .milliseconds(500)
         while MockHTTP.stopCount.current == 0,

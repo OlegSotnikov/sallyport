@@ -125,6 +125,11 @@ final class SocketClient: SocketRequesting {
 
     private static func configure(_ fd: Int32, timeout: TimeInterval) -> Bool {
         guard timeout.isFinite, timeout > 0 else { return false }
+        // The authenticated connection must not be inheritable by any child
+        // process — an inherited descriptor writes frames attributed to the
+        // shim's parent chain.
+        let flags = fcntl(fd, F_GETFD)
+        guard flags >= 0, fcntl(fd, F_SETFD, flags | FD_CLOEXEC) != -1 else { return false }
         var noSigPipe: Int32 = 1
         guard setsockopt(
             fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
@@ -165,6 +170,7 @@ final class SocketClient: SocketRequesting {
 enum ServerPeerAuthenticator {
     private static let solLocal: Int32 = 0
     private static let localPeerPID: Int32 = 0x002
+    private static let localPeerToken: Int32 = 0x006
     private static let expectedBundleID = "dev.sallyport.mac"
 
     static func peerPID(fd: Int32) -> pid_t? {
@@ -176,10 +182,20 @@ enum ServerPeerAuthenticator {
         return pid
     }
 
+    /// The peer's connect-time audit token, immune to PID reuse in the
+    /// window between connect and code-signing verification.
+    static func peerAuditToken(fd: Int32) -> Data? {
+        guard fd >= 0 else { return nil }
+        var token = audit_token_t()
+        var length = socklen_t(MemoryLayout<audit_token_t>.size)
+        guard getsockopt(fd, solLocal, localPeerToken, &token, &length) == 0,
+              length == socklen_t(MemoryLayout<audit_token_t>.size) else { return nil }
+        return withUnsafeBytes(of: token) { Data($0) }
+    }
+
     static func isTrusted(fd: Int32) -> Bool {
-        guard let pid = peerPID(fd: fd),
+        guard let peer = liveCode(fd: fd),
               let ownTeam = ownTeamIdentifier(),
-              let peer = liveCode(pid: pid),
               satisfiesAppleAnchor(peer),
               let info = signingInfo(peer),
               info[kSecCodeInfoTeamIdentifier as String] as? String == ownTeam,
@@ -198,9 +214,19 @@ enum ServerPeerAuthenticator {
         return team
     }
 
-    private static func liveCode(pid: pid_t) -> SecCode? {
+    private static func liveCode(fd: Int32) -> SecCode? {
+        // Prefer the audit token: it names one process instance, while a PID
+        // is a reusable number. Fall back to the PID only when the platform
+        // call is unavailable.
+        let attributes: CFDictionary
+        if let token = peerAuditToken(fd: fd) {
+            attributes = [kSecGuestAttributeAudit as String: token] as CFDictionary
+        } else if let pid = peerPID(fd: fd) {
+            attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
+        } else {
+            return nil
+        }
         var code: SecCode?
-        let attributes = [kSecGuestAttributePid as String: NSNumber(value: pid)] as CFDictionary
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess else {
             return nil
         }

@@ -91,6 +91,13 @@ final class VaultMgmtDaemon {
                 : String(localized: "Sign out of the MCP server “\(name)”")
         case "settings.set":   return settingsChangeReason(arg)
         case "allowlist.add":
+            // A non-empty id replaces an existing entry (the store upserts):
+            // the Touch ID prompt must describe the update, not an addition.
+            if !(arg?.objectValue?["id"]?.stringValue ?? "").isEmpty {
+                return name.isEmpty
+                    ? String(localized: "Update an allowlist entry")
+                    : String(localized: "Update the allowlist entry for “\(name)”")
+            }
             return name.isEmpty
                 ? String(localized: "Add an agent to the allowlist")
                 : String(localized: "Add the agent “\(name)” to the allowlist")

@@ -145,6 +145,46 @@ struct SessionProvenanceTests {
         #expect(Provenance.peerPID(fromFD: -1) == 0, "failure is best-effort zero")
     }
 
+    // Pins the LOCAL_PEERTOKEN value and the audit_token_t PID slot (val[5]):
+    // both are spelled locally, so this must agree with the kernel on the
+    // platform actually running the suite.
+    @Test("peerIdentity pins pid, start time, and audit token via LOCAL_PEERTOKEN")
+    func peerIdentityOnSocketpair() throws {
+        var fds: [Int32] = [-1, -1]
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        defer {
+            _ = Darwin.close(fds[0])
+            _ = Darwin.close(fds[1])
+        }
+        let identity = try #require(Provenance.peerIdentity(fromFD: fds[0]))
+        #expect(identity.pid == Int(getpid()))
+        #expect(identity.startedAt > 0)
+        #expect(Provenance.alive(pid: identity.pid, startedAt: identity.startedAt),
+                "the captured start time must match the kernel's for this instance")
+        let token = try #require(identity.auditToken, "modern Darwin must supply the token")
+        #expect(token.count == MemoryLayout<audit_token_t>.size)
+
+        // The token must drive code-signing guest lookup for this process.
+        #expect(Provenance.liveCodeSatisfies(pid: identity.pid, auditToken: token,
+                                             requirement: "anchor apple generic")
+                == Provenance.liveCodeSatisfies(pid: identity.pid,
+                                                requirement: "anchor apple generic"),
+                "token-keyed and pid-keyed lookups must agree for a live process")
+
+        #expect(Provenance.peerIdentity(fromFD: -1) == nil, "failure must be fail-closed")
+    }
+
+    @Test("cwd is captured from the kernel and fails to empty")
+    func cwdCapture() {
+        let own = Provenance.cwdPath(pid: Int(getpid()))
+        #expect(own == FileManager.default.currentDirectoryPath)
+        #expect(Provenance.cwdPath(pid: -1).isEmpty)
+        #expect(Provenance.cwdPath(pid: 0).isEmpty)
+
+        let prov = Provenance.chain(pid: Int(getpid()))
+        #expect(prov.origin.cwd == own, "the origin must carry its working directory")
+    }
+
     @Test("live signing information uses a real SecStaticCode and fails closed")
     func liveStaticCodeConversion() throws {
         #expect(SSHSpawner.liveCDHash(pid: -1) == nil)

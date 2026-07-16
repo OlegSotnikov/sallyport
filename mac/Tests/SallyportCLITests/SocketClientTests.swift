@@ -36,23 +36,34 @@ struct SocketClientTests {
         defer { close(descriptors.1) }
 
         #expect(ServerPeerAuthenticator.peerPID(fd: descriptors.0) == getpid())
+        let token = try #require(ServerPeerAuthenticator.peerAuditToken(fd: descriptors.0),
+                                 "modern Darwin must supply the peer audit token")
+        #expect(token.count == MemoryLayout<audit_token_t>.size)
+        #expect(ServerPeerAuthenticator.peerAuditToken(fd: -1) == nil)
         #expect(!ServerPeerAuthenticator.isTrusted(fd: descriptors.0))
 
         var inspectedFD: Int32 = -1
+        var peerFlags: Int32 = -1
         let client = SocketClient(
             connectedFileDescriptor: descriptors.0,
             timeout: 1,
             maxFrameBytes: 64,
             peerAuthenticator: { fd in
                 inspectedFD = fd
+                peerFlags = fcntl(fd, F_GETFD)
                 return false
             }
         )
         #expect(client == nil)
         #expect(inspectedFD == descriptors.0)
-        errno = 0
-        #expect(fcntl(descriptors.0, F_GETFD) == -1)
-        #expect(errno == EBADF)
+        #expect(peerFlags >= 0 && peerFlags & FD_CLOEXEC != 0,
+                "the connection must never be inheritable by a child process")
+        // Verify the rejected descriptor was closed through the connection
+        // itself: the peer end must observe EOF. Probing the fd number with
+        // fcntl/EBADF races against parallel tests recycling that number.
+        var byte: UInt8 = 0
+        #expect(recv(descriptors.1, &byte, 1, MSG_DONTWAIT) == 0,
+                "a rejected peer must close the connection (peer sees EOF)")
         #expect(ServerPeerAuthenticator.peerPID(fd: -1) == nil)
     }
 
