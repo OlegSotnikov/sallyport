@@ -32,7 +32,10 @@ APP_NAME="${APP_NAME:-Sallyport}"
 # This paid team provides one-year profiles for the keychain access group.
 # The access-group prefix must match the team ID.
 TEAM_ID="${TEAM_ID:-9MZ2ZL5CA3}"
-IDENTITY="${IDENTITY:-Apple Development: Oleg Sotnikov (W9TVJB944V)}"
+# All builds — local ones included — sign under the AppMaster team, matching
+# the release lane (mac/ci/release.sh) and the shim's peer-trust check, which
+# requires the app and sp to share one Team ID.
+IDENTITY="${IDENTITY:-Developer ID Application: AppMaster Inc (9MZ2ZL5CA3)}"
 
 [[ "$CONFIG" == "release" || "$CONFIG" == "debug" ]] || {
 	echo "error: CONFIG must be release or debug" >&2; exit 1;

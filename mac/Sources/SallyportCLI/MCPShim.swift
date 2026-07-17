@@ -282,7 +282,14 @@ public final class MCPShim {
     func run(input: FileHandle, output: FileHandle) {
         var framer = LineFramer(maxLineBytes: maxFrameBytes)
         do {
-            while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            while true {
+                // availableData blocks until at least one byte arrives (or EOF).
+                // read(upToCount:) blocks until the FULL count or EOF, so a live
+                // MCP host — which writes one small request and then waits for
+                // the reply on an open pipe — would deadlock against a 64 KiB
+                // read and time out without ever seeing the initialize response.
+                let chunk = input.availableData
+                if chunk.isEmpty { break }   // EOF
                 for line in try framer.push(chunk) {
                     handle(line, output: output)
                 }

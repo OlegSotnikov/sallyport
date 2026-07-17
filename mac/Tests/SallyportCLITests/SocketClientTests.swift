@@ -217,6 +217,52 @@ struct MCPShimTests {
         #expect((oversized.first?["error"] as? [String: Any])?["code"] as? Int == -32700)
     }
 
+    // Every real MCP host writes one request into an OPEN pipe and waits for
+    // the reply; only tests get to close stdin first. The shim must flush each
+    // reply as the request arrives, not at EOF — read(upToCount:) blocks for
+    // the full count and made every live host time out at initialize.
+    @Test("a reply is flushed while stdin stays open (live MCP host contract)")
+    func streamingReplyBeforeEOF() throws {
+        let input = Pipe()
+        let output = Pipe()
+        let shimDone = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            MCPShim(maxFrameBytes: 1024 * 1024, clientFactory: { nil })
+                .run(input: input.fileHandleForReading, output: output.fileHandleForWriting)
+            try? output.fileHandleForWriting.close()
+            shimDone.signal()
+        }
+
+        let gotReply = DispatchSemaphore(value: 0)
+        let replyBox = NSMutableData()
+        Thread.detachNewThread {
+            var buffered = Data()
+            while !buffered.contains(0x0A) {
+                let chunk = output.fileHandleForReading.availableData
+                if chunk.isEmpty { break }
+                buffered.append(chunk)
+            }
+            replyBox.append(buffered)
+            gotReply.signal()
+        }
+
+        try input.fileHandleForWriting.write(contentsOf: Data(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n".utf8))
+        // stdin deliberately stays open — the reply must arrive anyway.
+        #expect(gotReply.wait(timeout: .now() + 10) == .success,
+                "initialize must be answered before EOF")
+        let line = (replyBox as Data).split(separator: 0x0A).first ?? Data()
+        let message = try #require(
+            try JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+        #expect(message["id"] as? Int == 1)
+        let serverInfo = (message["result"] as? [String: Any])?["serverInfo"] as? [String: Any]
+        #expect(serverInfo?["name"] as? String == "sallyport")
+
+        try input.fileHandleForWriting.close()
+        #expect(shimDone.wait(timeout: .now() + 10) == .success,
+                "EOF must still terminate the shim loop")
+    }
+
     private func runShim(
         _ inputText: String,
         maxFrameBytes: Int = 8 * 1024 * 1024,
