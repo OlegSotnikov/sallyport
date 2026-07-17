@@ -67,7 +67,7 @@ Entries may be scoped to hosts. Sallyport matches them against the live process 
 
 Adding, updating, or removing an allowlist entry always requires Touch ID. The allowlist is sealed under the DEK.
 
-Two management conveniences change nothing in the gate itself. A known-agents registry (label, bundle ID, Team ID, standard install paths for Claude Desktop, Claude Code, Codex CLI) locates binaries and cross-checks captures; entries are still captured from the binary on disk and verified by Security.framework. When a captured identity carries the same valid Team ID and bundle ID as an existing cdhash entry but a new hash — the pinned agent updated — the UI offers a one-ceremony pin replacement that keeps the entry's scope.
+Two management conveniences change nothing in the gate itself. A known-agents registry (label, bundle ID, Team ID, standard install paths for Claude Desktop, Claude Code, Codex CLI) locates binaries and cross-checks captures; entries are still captured from the binary on disk and verified by Security.framework. When a captured identity carries the same valid Team ID and bundle ID as an existing cdhash entry but a new hash (the pinned agent updated), the UI offers a one-ceremony pin replacement that keeps the entry's scope.
 
 An allowlist authenticates process identity, not intent. With an inherited descriptor, Sallyport cannot prove which component authored each byte.
 

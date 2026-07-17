@@ -26,7 +26,7 @@ public actor MockMgmtDaemon {
     public init(seeded: Bool = true) {
         guard seeded else { return }
         secrets = Self.seedSecrets
-        secretValues = ["cf_token": "redacted", "gh_pat": "redacted", "ws_kz_key": "redacted"]
+        secretValues = ["cf_token": "redacted", "gh_pat": "redacted", "web_01_key": "redacted"]
         hosts = Self.seedHosts
     }
 
@@ -223,18 +223,18 @@ public actor MockMgmtDaemon {
                                  bind: ["api.github.com"], adapter: "bearer",
                                  format: "token {secret}", version: 1,
                                  rotatedAt: "2026-06-20T14:03:00Z"),
-        "ws_kz_key": SecretMetadata(name: "ws_kz_key", kind: "ssh-ed25519",
-                                    bind: [], adapter: "ssh", version: 1,
-                                    rotatedAt: "2026-05-30T08:00:00Z"),
+        "web_01_key": SecretMetadata(name: "web_01_key", kind: "ssh-ed25519",
+                                     bind: [], adapter: "ssh", version: 1,
+                                     rotatedAt: "2026-05-30T08:00:00Z"),
     ]
 
     private static let seedHosts: [String: Host] = [
-        "r-kz": Host(name: "r-kz", addr: "192.168.89.1", user: "deploy", port: 22,
-                     tags: ["fleet", "kz", "mikrotik"], hostkey: "accept-new"),
-        "ws-kz": Host(name: "ws-kz", addr: "10.10.3.10", user: "deploy", port: 442,
-                      tags: ["fleet", "kz", "nginx"], key: "ws_kz_key", hostkey: "strict"),
-        "web-prod-1": Host(name: "web-prod-1", addr: "203.0.113.10", user: "deploy", port: 442,
-                           tags: ["fleet", "kz", "hosting"], key: "ws_kz_key", hostkey: "accept-new"),
+        "edge-01": Host(name: "edge-01", addr: "192.0.2.1", user: "deploy", port: 22,
+                        tags: ["fleet", "edge", "mikrotik"], hostkey: "accept-new"),
+        "web-01": Host(name: "web-01", addr: "198.51.100.10", user: "deploy", port: 2222,
+                       tags: ["fleet", "web", "nginx"], key: "web_01_key", hostkey: "strict"),
+        "web-prod-1": Host(name: "web-prod-1", addr: "203.0.113.10", user: "deploy", port: 2222,
+                           tags: ["fleet", "web", "hosting"], key: "web_01_key", hostkey: "accept-new"),
     ]
 
 }

@@ -21,7 +21,7 @@ struct AppModelDecisionTests {
     private func ask(id: String, mode: String = "session") -> EngineApproval {
         EngineApproval(
             id: id, mode: mode, rule: "session.gate", reason: "New agent process",
-            channel: "ssh", tool: "ssh.exec", summary: "restart nginx on ws-kz", host: "ws-kz",
+            channel: "ssh", tool: "ssh.exec", summary: "restart nginx on web-01", host: "web-01",
             origin: SallyportVault.Origin(
                 pid: 4321, startedAt: 111, name: "claude", path: "/usr/local/bin/claude",
                 appName: "Claude Code", signedBy: "Developer ID Application: Anthropic PBC",

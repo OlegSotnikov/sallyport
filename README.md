@@ -1,12 +1,24 @@
 # Sallyport
 
-Sallyport is an Apple Silicon Mac app that executes authenticated API, SSH, and proxied MCP actions without giving the agent direct access to its vault. Target results are returned without credential-content filtering.
+**Let your agent touch prod. Keep the keys.**
 
-`Sallyport.app` hosts the vault, decision engine, approvals, audit, management UI, and agent socket in one process. The bundle includes the `sp mcp` shim and stateless `sp-ssh` helper. There is no daemon, server, Linux, or Docker build.
+Sallyport is a free Mac app that holds API and SSH credentials in an encrypted local vault and executes authenticated actions for AI agents. The agent asks for an operation over MCP; Sallyport runs it, records it in a signed journal, and the key never appears in the agent's environment. There is no command that reveals a stored credential, and no export or recovery route either.
+
+Website: [sallyport.dev](https://sallyport.dev)
+
+## Why
+
+Coding agents read `.env` files, shell variables, and config files, and so does every package they pull in. Recent npm supply-chain attacks harvested credentials from exactly those places, and a prompt-injected agent can leak a token without any malware at all.
+
+Traditional secret managers still deliver the secret to the workload. That model breaks when the workload itself is untrusted. Sallyport inverts it: the workload gets an action, the vault keeps the secret.
+
+The exact security boundary, including what Sallyport does not stop, is written down in [docs/14-trust-model.md](docs/14-trust-model.md) and [docs/08-security-model.md](docs/08-security-model.md). Executor responses are returned as received, so a target that echoes sensitive data is outside the credential-isolation guarantee.
 
 ## Repository
 
 This public repository contains one source snapshot per Sallyport release. Pull requests are not accepted here. Report bugs and security issues as described in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Install
 
 Install the signed and notarized DMG from [sallyport.dev](https://sallyport.dev), [Releases](../../releases), or Homebrew:
 
@@ -14,7 +26,13 @@ Install the signed and notarized DMG from [sallyport.dev](https://sallyport.dev)
 brew install --cask olegsotnikov/tap/sallyport
 ```
 
-Release checksums are published with each release and in `https://sallyport.dev/downloads/manifest.json`.
+Launch the app, create the vault, add a credential, and point your MCP client at the gate:
+
+```bash
+claude mcp add sallyport -- /Applications/Sallyport.app/Contents/MacOS/sp mcp
+```
+
+From install to the first gated call takes about two minutes. Requires Apple Silicon and macOS 14 or newer. Release checksums are published with each release and in `https://sallyport.dev/downloads/manifest.json`.
 
 ## Authorization
 
@@ -59,8 +77,10 @@ Configure an MCP client to run `Sallyport.app/Contents/MacOS/sp mcp`. The shippe
 | [docs/04-vault.md](docs/04-vault.md) | vault and keystore |
 | [docs/05-approvals.md](docs/05-approvals.md) | session and per-call approvals |
 | [docs/06-audit.md](docs/06-audit.md) | audit, result handling, and recordings |
+| [docs/07-identity-deployment.md](docs/07-identity-deployment.md) | process identity and deployment |
 | [docs/08-security-model.md](docs/08-security-model.md) | threats and residual risk |
 | [docs/11-reference.md](docs/11-reference.md) | settings, tools, operations, errors |
+| [docs/15-messaging.md](docs/15-messaging.md) | messaging and claims policy |
 
 ## License
 

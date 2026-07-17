@@ -32,8 +32,8 @@ struct MgmtCodecTests {
     func everyOpRoundTrips() throws {
         let secret = SecretInput(name: "cf_token", kind: "bearer", value: "s3cr3t",
                                  bind: ["api.cloudflare.com"], header: nil, format: "Bearer {secret}")
-        let host = Host(name: "r-kz", addr: "192.168.89.1", user: "os", port: 442,
-                        tags: ["fleet", "kz"], key: "ws_kz_key", hostkey: "accept-new")
+        let host = Host(name: "edge-01", addr: "192.0.2.1", user: "deploy", port: 22,
+                        tags: ["fleet", "edge"], key: "web_01_key", hostkey: "accept-new")
         let sim = PolicySimInput(principal: "agent://mac.cli", channel: "http",
                                  tool: "http.request", host: "api.cloudflare.com", method: "POST")
 
@@ -44,7 +44,7 @@ struct MgmtCodecTests {
             .mgmt(id: "m4", op: "secrets.delete", arg: .object(["name": .string("cf_token")])),
             .mgmt(id: "m5", op: "hosts.list", arg: nil),
             .mgmt(id: "m6", op: "hosts.set", arg: host.arg),
-            .mgmt(id: "m7", op: "hosts.delete", arg: .object(["name": .string("r-kz")])),
+            .mgmt(id: "m7", op: "hosts.delete", arg: .object(["name": .string("edge-01")])),
             .mgmt(id: "m8", op: "policy.get", arg: nil),
             .mgmt(id: "m9", op: "policy.set", arg: .object(["main": .string("allow: a"), "tests": .string("allow: a")])),
             .mgmt(id: "m10", op: "policy.test", arg: nil),
@@ -104,14 +104,14 @@ struct MgmtModelTests {
     @Test("Host decodes with defaults and builds the right arg")
     func hostRoundTrip() throws {
         let host = try JSONValue.object([
-            "name": .string("ws-kz"), "addr": .string("10.10.3.10"),
-            "user": .string("os"), "port": .int(442),
-            "tags": .array([.string("fleet")]), "key": .string("ws_kz_key"),
+            "name": .string("web-01"), "addr": .string("198.51.100.10"),
+            "user": .string("deploy"), "port": .int(2222),
+            "tags": .array([.string("fleet")]), "key": .string("web_01_key"),
             "hostkey": .string("strict"),
         ]).decoded(Host.self)
-        #expect(host.port == 442)
+        #expect(host.port == 2222)
         #expect(host.hostkey == "strict")
-        #expect(host.arg.objectValue?["addr"]?.stringValue == "10.10.3.10")
+        #expect(host.arg.objectValue?["addr"]?.stringValue == "198.51.100.10")
     }
 
     @Test("StatusInfo decodes a partial reply")
@@ -128,17 +128,17 @@ struct MgmtModelTests {
     @Test("SecretInput includes `passphrase` in arg only when non-empty")
     func secretInputPassphraseArg() {
         // With a passphrase → the arg carries it (write-only, alongside value).
-        let withPass = SecretInput(name: "ws_kz_key", kind: "ssh-ed25519",
+        let withPass = SecretInput(name: "web_01_key", kind: "ssh-ed25519",
                                    value: "-----BEGIN OPENSSH PRIVATE KEY-----…",
                                    passphrase: "hunter2")
         #expect(withPass.arg.objectValue?["passphrase"]?.stringValue == "hunter2")
 
         // No passphrase (nil) → the key is omitted entirely.
-        let noPass = SecretInput(name: "ws_kz_key", kind: "ssh-ed25519", value: "key")
+        let noPass = SecretInput(name: "web_01_key", kind: "ssh-ed25519", value: "key")
         #expect(noPass.arg.objectValue?.keys.contains("passphrase") == false)
 
         // Blank/whitespace passphrase → also omitted (uses the .nonEmpty helper).
-        let blank = SecretInput(name: "ws_kz_key", kind: "ssh-ed25519", value: "key", passphrase: "   ")
+        let blank = SecretInput(name: "web_01_key", kind: "ssh-ed25519", value: "key", passphrase: "   ")
         #expect(blank.arg.objectValue?.keys.contains("passphrase") == false)
     }
 
@@ -177,7 +177,7 @@ struct MgmtClientTests {
         await client.deliver(.mgmtReply(id: secretsID, ok: true,
                                         result: .object(["secrets": .array([])]), error: nil, detail: nil, code: nil))
         await client.deliver(.mgmtReply(id: hostsID, ok: true,
-                                        result: .object(["hosts": .array([.object(["name": .string("r-kz")])])]),
+                                        result: .object(["hosts": .array([.object(["name": .string("edge-01")])])]),
                                         error: nil, detail: nil, code: nil))
 
         let hosts = try await hostsTask.value
@@ -245,12 +245,12 @@ struct MgmtClientMockTests {
     func hostsCRUD() async throws {
         let client = MgmtClient.mock(daemon: MockMgmtDaemon(seeded: false))
         #expect(try await client.listHosts().isEmpty)
-        try await client.setHost(Host(name: "ws-kz", addr: "10.10.3.10", user: "os", port: 442,
-                                       tags: ["fleet"], key: "ws_kz_key", hostkey: "strict"))
+        try await client.setHost(Host(name: "web-01", addr: "198.51.100.10", user: "deploy", port: 2222,
+                                       tags: ["fleet"], key: "web_01_key", hostkey: "strict"))
         var hosts = try await client.listHosts()
         #expect(hosts.count == 1)
-        #expect(hosts.first?.addr == "10.10.3.10")
-        try await client.deleteHost(name: "ws-kz")
+        #expect(hosts.first?.addr == "198.51.100.10")
+        try await client.deleteHost(name: "web-01")
         hosts = try await client.listHosts()
         #expect(hosts.isEmpty)
     }
