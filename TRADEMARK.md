@@ -5,11 +5,9 @@ The name **"Sallyport"**, the Sallyport gate glyph and logo, and the domain
 exists so that when someone sees the Sallyport name, they can be sure the
 software actually comes from this project.
 
-The code license ([LICENSE.md](LICENSE.md)) grants **no trademark rights**.
-Its Trademarks clause is explicit. The Apache-2.0 license that each
-release converts to after two years likewise grants none (Apache-2.0 §6).
-Your right to use, modify and redistribute the code is never a right to the
-name.
+The code license ([LICENSE.md](LICENSE.md)) grants **no trademark rights**;
+Apache-2.0 §6 is explicit about it. Your right to use, modify and
+redistribute the code is never a right to the name.
 
 ## Allowed without permission
 

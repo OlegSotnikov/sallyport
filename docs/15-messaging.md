@@ -37,7 +37,7 @@ Each claim is anchored to documented behavior. Do not strengthen them.
 | There is no command that reveals a stored credential, and no export or recovery route. | 14-trust-model; vault has no reveal/export/recovery. |
 | For built-in HTTP and SSH, the key never appears in the agent's environment. | 02-channels; credential attaches inside the executor. |
 | You approve runs with a click or Touch ID; a synthetic click cannot satisfy the biometric prompt. | 05-approvals. |
-| Local only: no account, no cloud service, no telemetry. Free download. | 00-vision principles; FSL-1.1-ALv2 licensing. |
+| Local only: no account, no cloud service, no telemetry. Free download. | 00-vision principles; Apache-2.0 licensing. |
 | Every admitted action lands in an encrypted, hash-chained, tamper-evident journal. | 06-audit. |
 | While the vault is locked, every agent action is denied. | 14-trust-model vault gate. |
 | Setup is about two minutes: brew install, add a key, add the MCP shim. | download quickstart; keep honest if onboarding grows. |
@@ -50,8 +50,6 @@ Each claim is anchored to documented behavior. Do not strengthen them.
   injected instructions.
 - Anything implying content inspection, request-intent analysis, sandboxing of MCP upstreams,
   host firewalling, or antivirus behavior.
-- "Open source" without qualification. It is Fair Source (FSL-1.1-ALv2) converting to
-  Apache-2.0 after two years.
 - Blanket key-isolation claims that ignore local stdio MCP servers, which do receive bound
   credentials in their environment.
 

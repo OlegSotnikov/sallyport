@@ -84,6 +84,6 @@ Configure an MCP client to run `Sallyport.app/Contents/MacOS/sp mcp`. The shippe
 
 ## License
 
-Source is available under [FSL-1.1-ALv2](LICENSE.md). Each release converts to Apache-2.0 two years after publication. Sallyport is not currently OSI open source.
+Licensed under [Apache-2.0](LICENSE.md).
 
 The Sallyport name, glyph, and logo are trademarks. See [TRADEMARK.md](TRADEMARK.md).
